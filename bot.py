@@ -44,12 +44,12 @@ def set_balance(user_id, amount):
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)  # Disable default help
 
 @bot.event
 async def on_ready():
     """Called when bot successfully logs in"""
-    print(f'✅ Bot logged in as {bot.user.tag}')
+    print(f'✅ Bot logged in as {bot.user.name}')
     print(f'Bot ID: {bot.user.id}')
     await bot.change_presence(activity=discord.Game(name="Военная-политическая-игра"))
 
@@ -73,6 +73,51 @@ async def info(ctx):
     )
     embed.add_field(name="Создатель", value=f"{bot.owner_id if bot.owner_id else 'Unknown'}", inline=False)
     embed.add_field(name="Версия", value="1.0.0", inline=False)
+    await ctx.send(embed=embed)
+
+# ===== HELP COMMAND =====
+
+@bot.command(name='help')
+async def help_command(ctx):
+    """Show all available commands"""
+    embed = discord.Embed(
+        title="📖 Список команд",
+        description="Все доступные команды бота. Префикс: `!`",
+        color=discord.Color.blurple()
+    )
+
+    embed.add_field(
+        name="⚙️ Основные",
+        value=(
+            "`!help` — показать это сообщение\n"
+            "`!ping` — проверить задержку бота\n"
+            "`!hello` — поздороваться с ботом\n"
+            "`!info` — информация о боте"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="💰 Экономика",
+        value=(
+            "`!balance [@пользователь]` — проверить баланс\n"
+            "`!work` — поработать и заработать деньги (раз в час)\n"
+            "`!daily` — получить ежедневную награду (500 💵)\n"
+            "`!pay @пользователь <сумма>` — перевести деньги\n"
+            "`!leaderboard` — топ-10 богатейших игроков"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🎮 Игры",
+        value=(
+            "`!dice <ставка>` — кинуть кубик (выиграй x2 при ролле > 50)"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text=f"Запросил: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
     await ctx.send(embed=embed)
 
 # ===== ECONOMY COMMANDS =====
@@ -278,6 +323,10 @@ async def on_command_error(ctx, error):
     """Handle command errors"""
     if isinstance(error, commands.CommandNotFound):
         await ctx.send(f"❌ Команда не найдена. Используйте `!help`")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Не хватает аргументов. Используйте `!help` для подсказки.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send(f"❌ Неверный аргумент. Используйте `!help` для подсказки.")
     else:
         print(f"Error: {error}")
 
