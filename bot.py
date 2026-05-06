@@ -625,7 +625,7 @@ class Admin(commands.Cog, name="👑 Админ"):
 
 # ===== LOAD COGS & RUN =====
 
-@bot.event
+@bot.event 
 async def setup_hook():
     await bot.add_cog(General(bot))
     await bot.add_cog(Economy(bot))
