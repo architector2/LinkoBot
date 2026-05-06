@@ -37,6 +37,18 @@ async def get_user(user_id: int) -> dict:
             'last_collect': 0,
         }
         await economy_col.insert_one(user)
+    else:
+        # Add missing fields for old users
+        update = {}
+        if 'gdp' not in user:
+            update['gdp'] = 0
+        if 'last_collect' not in user:
+            update['last_collect'] = 0
+        if 'balance' not in user:
+            update['balance'] = 0
+        if update:
+            await economy_col.update_one({'_id': str(user_id)}, {'$set': update})
+            user.update(update)
     return user
 
 async def update_user(user_id: int, data: dict):
