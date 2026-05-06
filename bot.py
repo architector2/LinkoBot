@@ -200,8 +200,9 @@ class Economy(commands.Cog, name="💰 Экономика"):
         hours_passed = (current_time - last_collect) / 3600
         hours_passed = min(hours_passed, 12)
 
-        if hours_passed < 0.0167:
-            await ctx.send("⏰ Подожди немного перед следующим коллектом!")
+        if hours_passed < 1:
+            remaining_mins = int((1 - hours_passed) * 60)
+            await ctx.send(f"⏰ Подожди ещё **{remaining_mins}** мин. перед следующим коллектом!")
             return
 
         income_per_hour = user['gdp'] / 48
@@ -250,7 +251,26 @@ class Economy(commands.Cog, name="💰 Экономика"):
             await ctx.send(f"❌ Недостаточно денег! Баланс: {user['balance']:,} 💵")
             return
 
-        new_gdp = user['gdp'] + amount
+        # GDP efficiency tiers
+        gdp = user['gdp']
+        if gdp < 300_000_000_000:
+            efficiency = 0.50
+            tier = "50%"
+        elif gdp <= 500_000_000_000:
+            efficiency = 0.40
+            tier = "40%"
+        elif gdp <= 900_000_000_000:
+            efficiency = 0.30
+            tier = "30%"
+        elif gdp <= 2_800_000_000_000:
+            efficiency = 0.15
+            tier = "15%"
+        else:
+            efficiency = 0.10
+            tier = "10%"
+
+        gdp_gain = int(amount * efficiency)
+        new_gdp = user['gdp'] + gdp_gain
         new_balance = user['balance'] - amount
 
         await update_user(ctx.author.id, {
@@ -263,6 +283,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
             description=f"{ctx.author.mention} вложил **{amount:,}** 💵 в ВВП",
             color=discord.Color.blue()
         )
+        embed.add_field(name="Эффективность", value=f"{tier} от вложения", inline=False)
+        embed.add_field(name="Прирост ВВП", value=f"+{gdp_gain:,} 💵", inline=True)
         embed.add_field(name="Старый ВВП", value=f"{user['gdp']:,} 💵", inline=True)
         embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=True)
         embed.add_field(name="Баланс", value=f"{new_balance:,} 💵", inline=False)
