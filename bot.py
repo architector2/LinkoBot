@@ -1,8 +1,9 @@
 import discord
 from discord.ext import commands
 import os
+import re
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import motor.motor_asyncio
 
 # Load environment variables
@@ -14,6 +15,7 @@ MONGODB_URI = os.getenv('MONGODB_URI')
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
 db = mongo_client['discord_bot']
 economy_col = db['economy']
+reform_links_col = db['reform_links']  # NEW: для контроля уникальности ссылок
 
 # Role ID for registered players
 REGISTERED_ROLE_ID = 1501510805169115176
@@ -41,7 +43,6 @@ async def get_user(user_id: int) -> dict:
         }
         await economy_col.insert_one(user)
     else:
-        # Add missing fields for old users
         update = {}
         if 'gdp' not in user:
             update['gdp'] = 0
@@ -67,49 +68,7 @@ async def update_user(user_id: int, data: dict):
         upsert=True
     )
 
-def make_bar(current: float, maximum: float, length: int = 10) -> str:
-    """
-    Возвращает ASCII-прогресс бар.
-    Например: [████████░░] 80%
-    """
-    if maximum <= 0:
-        return f"[{'░' * length}] 0%"
-    ratio = min(current / maximum, 1.0)
-    filled = int(ratio * length)
-    bar = '█' * filled + '░' * (length - filled)
-    percent = ratio * 100
-    return f"[{bar}] {percent:.1f}%"
-
-def calculate_population_growth(user: dict) -> tuple[int, float]:
-    """
-    Рассчитывает накопленный прирост населения.
-    Возвращает (новое_население, часов_прошло).
-    1 игровой год = 48 часов реального времени.
-    """
-    population = user.get('population', 0)
-    if population == 0:
-        return population, 0.0
-
-    last_pop_update = user.get('last_pop_update', 0)
-    if last_pop_update == 0:
-        return population, 0.0
-
-    yearly_pct = user.get('pop_growth_yearly', 2.0)
-    hourly_pct = yearly_pct / 48.0  # % в час (1 игровой год = 48ч)
-
-    current_time = datetime.now().timestamp()
-    hours_passed = (current_time - last_pop_update) / 3600
-
-    if hours_passed < 0.01:
-        return population, 0.0
-
-    growth_multiplier = (1 + hourly_pct / 100) ** hours_passed
-    new_population = int(population * growth_multiplier)
-
-    return new_population, hours_passed
-
 def is_registered():
-    """Check decorator - user must have registered role"""
     async def predicate(ctx):
         role = ctx.guild.get_role(REGISTERED_ROLE_ID)
         if role is None or role not in ctx.author.roles:
@@ -136,7 +95,7 @@ async def on_message(message):
 USAGE_HINTS = {
     'pay': '❌ Использование: `!pay @игрок <сумма>`\nПример: `!pay @Undervud 5000`',
     'give-vvp': '❌ Использование: `!give-vvp @игрок <сумма>`\nПример: `!give-vvp @Undervud 1000000000`',
-    'reforms': '❌ Использование: `!reforms <сумма>`\nПример: `!reforms 1000000`',
+    'reforms': '❌ Использование: `!reforms <сумма> <ссылка на сообщение из канала реформ>`\nПример: `!reforms 1000000 https://discord.com/channels/...`',
     'balance': '❌ Использование: `!balance` или `!balance @игрок`',
     'cab': '❌ Использование: `!cab` или `!cab @игрок`',
     'naselprocent': '❌ Использование: `!naselprocent @игрок <1-100>`\nПример: `!naselprocent @Undervud 3`',
@@ -184,7 +143,6 @@ class General(commands.Cog, name="⚙️ Основные"):
             color=discord.Color.blurple()
         )
         seen = set()
-        # Show only non-admin cogs in !help
         excluded_cogs = {"👑 Админ"}
         for cog_name, cog in self.bot.cogs.items():
             if cog_name in excluded_cogs:
@@ -221,7 +179,7 @@ class General(commands.Cog, name="⚙️ Основные"):
         await ctx.send(embed=embed)
 
 # ===========================
-# 💰 COG: ECONOMY (modified)
+# 💰 COG: ECONOMY
 # ===========================
 
 class Economy(commands.Cog, name="💰 Экономика"):
@@ -249,7 +207,6 @@ class Economy(commands.Cog, name="💰 Экономика"):
         """Собрать доход и прирост населения"""
         user = await get_user(ctx.author.id)
 
-        # ===== Доход от ВВП =====
         if user['gdp'] == 0:
             await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
             return
@@ -268,14 +225,12 @@ class Economy(commands.Cog, name="💰 Экономика"):
         earned = int(income_per_hour * hours_passed)
         new_balance = user['balance'] + earned
 
-        # ===== Прирост населения =====
         population = user.get('population', 0)
         pop_gained = 0
         new_population = population
         if population > 0:
             last_pop_update = user.get('last_pop_update', 0)
             if last_pop_update == 0:
-                # Если населения >0, но таймер не установлен – ставим сейчас
                 last_pop_update = current_time
             yearly_pct = user.get('pop_growth_yearly', 2.0)
             hourly_pct = yearly_pct / 48.0
@@ -286,9 +241,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 pop_gained = new_population - population
                 if pop_gained > 0:
                     population = new_population
-            # Если часы очень малы – прироста не будет
 
-        # ===== Применяем изменения =====
         update_data = {
             'balance': new_balance,
             'last_collect': current_time,
@@ -297,12 +250,10 @@ class Economy(commands.Cog, name="💰 Экономика"):
             update_data['population'] = new_population
             update_data['last_pop_update'] = current_time
         elif population > 0 and user.get('last_pop_update', 0) == 0:
-            # если население > 0, но таймер отсутствовал – проставим его
             update_data['last_pop_update'] = current_time
 
         await update_user(ctx.author.id, update_data)
 
-        # ===== Embed сообщения =====
         embed = discord.Embed(
             title="💵 Коллект",
             description=f"Ты собрал доход за **{hours_passed:.1f}** ч.",
@@ -313,7 +264,6 @@ class Economy(commands.Cog, name="💰 Экономика"):
         embed.add_field(name="Получено денег", value=f"+{earned:,} 💵", inline=False)
         embed.add_field(name="Новый баланс", value=f"{new_balance:,} 💵", inline=False)
 
-        # Информация о населении
         if population > 0:
             if pop_gained > 0:
                 embed.add_field(
@@ -331,19 +281,37 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 name="🌍 Новое население",
                 value=f"{new_population:,} чел.",
                 inline=False
-        )
+            )
 
         await ctx.send(embed=embed)
 
     @commands.command(name='reforms')
     @is_registered()
-    async def reforms(self, ctx, amount: int = None):
-        """Вложить деньги в ВВП (макс x2 от текущего ВВП)"""
-        if amount is None:
-            await ctx.send("❌ Укажи сумму! Пример: `!reforms 1000000`")
+    async def reforms(self, ctx, amount: int = None, *, message_link: str = None):
+        """Вложить деньги в ВВП (требуется ссылка на сообщение из канала реформ)"""
+        if amount is None or message_link is None:
+            await ctx.send("❌ Использование: `!reforms <сумма> <ссылка на сообщение из канала реформ>`\nПример: `!reforms 1000000 https://discord.com/channels/...`")
             return
         if amount <= 0:
             await ctx.send("❌ Сумма должна быть больше 0!")
+            return
+
+        # Проверка, что ссылка ведёт в нужный канал
+        pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
+        match = re.match(pattern, message_link)
+        if not match:
+            await ctx.send("❌ Неверный формат ссылки. Ожидается ссылка на сообщение Discord.")
+            return
+        channel_id = match.group(1)
+        message_id = match.group(2)
+        if channel_id != "1363585142593032412":
+            await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
+            return
+
+        # Проверка, не использовалась ли уже эта ссылка
+        existing = await reform_links_col.find_one({"message_id": message_id})
+        if existing:
+            await ctx.send("❌ Эта ссылка уже была использована для реформ. Пожалуйста, приложите новое сообщение.")
             return
 
         user = await get_user(ctx.author.id)
@@ -383,14 +351,25 @@ class Economy(commands.Cog, name="💰 Экономика"):
         new_gdp = user['gdp'] + gdp_gain
         new_balance = user['balance'] - amount
 
+        # Сохраняем использование ссылки ДО применения изменений, чтобы избежать race condition
+        await reform_links_col.insert_one({
+            "message_id": message_id,
+            "channel_id": channel_id,
+            "used_by": str(ctx.author.id),
+            "used_at": datetime.now().timestamp()
+        })
+
         await update_user(ctx.author.id, {
             'gdp': new_gdp,
             'balance': new_balance
         })
 
+        # Формируем красивую кликабельную ссылку
+        reason_display = f"[Ссылка]({message_link})"
+
         embed = discord.Embed(
             title="🏗️ Реформы",
-            description=f"{ctx.author.mention} вложил **{amount:,}** 💵 в ВВП",
+            description=f"{ctx.author.mention} вложил **{amount:,}** 💵 в ВВП\nПричина: {reason_display}",
             color=discord.Color.blue()
         )
         embed.add_field(name="Эффективность", value=f"{tier} от вложения", inline=False)
@@ -461,38 +440,23 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='cab')
     @is_registered()
     async def cab(self, ctx, member: discord.Member = None):
-        """Статистика игрока — ВВП, баланс, население, место в топе"""
+        """Статистика игрока — ВВП, баланс, население (статичное), место в топе"""
         if member is None:
             member = ctx.author
 
         user = await get_user(member.id)
 
-        # ── Население: начислить накопленный прирост ──
-        current_time = datetime.now().timestamp()
-        new_population, pop_hours_passed = calculate_population_growth(user)
-        pop_gained = new_population - user.get('population', 0)
-
-        if pop_gained > 0:
-            await update_user(member.id, {
-                'population': new_population,
-                'last_pop_update': current_time
-            })
-            user['population'] = new_population
-
-        # Если население > 0, но last_pop_update ещё не выставлен — выставим
-        if user.get('population', 0) > 0 and user.get('last_pop_update', 0) == 0:
-            await update_user(member.id, {'last_pop_update': current_time})
-
-        # ── Рейтинг по балансу ──
+        # Рейтинг по балансу
         top_users = await economy_col.find().sort('balance', -1).to_list(length=None)
         position = next(
             (i + 1 for i, u in enumerate(top_users) if u['_id'] == str(member.id)),
             None
         )
 
-        # ── Доход от ВВП ──
+        # Доход от ВВП
         income_per_hour = user['gdp'] / 48 if user['gdp'] > 0 else 0
 
+        current_time = datetime.now().timestamp()
         last_collect = user.get('last_collect', 0)
         if last_collect > 0:
             hours_since = (current_time - last_collect) / 3600
@@ -501,7 +465,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         else:
             pending = 0
 
-        # ── Прирост населения в % за игровой год ──
+        # Прирост населения в % (только для отображения)
         yearly_pct = user.get('pop_growth_yearly', 2.0)
         hourly_pct = yearly_pct / 48.0
 
@@ -517,14 +481,11 @@ class Economy(commands.Cog, name="💰 Экономика"):
         embed.add_field(name="🏆 Место в топе", value=f"#{position}" if position else "—", inline=True)
         embed.add_field(name="\u200b", value="\u200b", inline=True)  # spacer
 
-        # ── Блок населения (без прогресс-баров) ──
+        # Блок населения – статичный
         population = user.get('population', 0)
         if population > 0:
-            gained_str = f"+{pop_gained:,} чел." if pop_gained > 0 else "0 чел."
             pop_block = (
                 f"👥 **{population:,} чел.**\n"
-                f"Прирост за сеанс: **{gained_str}**\n"
-                f"\n"
                 f"📊 Прирост: **{yearly_pct:.2f}%/игр.год** · **{hourly_pct:.4f}%/ч**"
             )
         else:
@@ -626,11 +587,9 @@ class Admin(commands.Cog, name="👑 Админ"):
         current_time = datetime.now().timestamp()
         update_data = {'population': new_population}
 
-        # Если население впервые стало > 0, выставляем таймер прироста
         if old_population == 0 and new_population > 0:
             update_data['last_pop_update'] = current_time
 
-        # Если население обнулили — сбрасываем таймер
         if new_population == 0:
             update_data['last_pop_update'] = 0
 
