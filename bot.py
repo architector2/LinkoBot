@@ -1,8 +1,9 @@
 import discord
 from discord.ext import commands
+from discord.ui import Select, View
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import motor.motor_asyncio
 
 # Load environment variables
@@ -648,14 +649,199 @@ class Admin(commands.Cog, name="👑 Админ"):
         embed.add_field(name="Было", value=f"{old_population:,} чел.", inline=True)
         embed.add_field(name="Стало", value=f"{new_population:,} чел.", inline=True)
         await ctx.send(embed=embed)
+        
+        # ===========================
+# 🌍 COG: REGISTRATION
+# ===========================
 
-# ===== LOAD COGS & RUN =====
+class Registration(commands.Cog, name="🌍 Регистрация"):
+    def __init__(self, bot):
+        self.bot = bot
+        self.states_col = db['states']  # collection for user states
+
+        # Predefined data for continents and countries
+        self.continents = {
+            "Европа": [
+                {"name": "Германия", "gdp": 4_200_000_000_000, "population": 83_000_000},
+                {"name": "Франция", "gdp": 3_100_000_000_000, "population": 68_000_000},
+                {"name": "Великобритания", "gdp": 3_300_000_000_000, "population": 67_000_000},
+                {"name": "Италия", "gdp": 2_100_000_000_000, "population": 59_000_000},
+            ],
+            "Азия": [
+                {"name": "Китай", "gdp": 17_700_000_000_000, "population": 1_400_000_000},
+                {"name": "Япония", "gdp": 4_900_000_000_000, "population": 125_000_000},
+                {"name": "Индия", "gdp": 3_700_000_000_000, "population": 1_400_000_000},
+                {"name": "Южная Корея", "gdp": 1_800_000_000_000, "population": 51_000_000},
+            ],
+            "Северная Америка": [
+                {"name": "США", "gdp": 25_000_000_000_000, "population": 332_000_000},
+                {"name": "Канада", "gdp": 2_200_000_000_000, "population": 38_000_000},
+                {"name": "Мексика", "gdp": 1_400_000_000_000, "population": 128_000_000},
+            ],
+            "Африка": [
+                {"name": "Нигерия", "gdp": 477_000_000_000, "population": 218_000_000},
+                {"name": "ЮАР", "gdp": 405_000_000_000, "population": 60_000_000},
+                {"name": "Египет", "gdp": 476_000_000_000, "population": 109_000_000},
+            ],
+            "Южная Америка": [
+                {"name": "Бразилия", "gdp": 2_000_000_000_000, "population": 214_000_000},
+                {"name": "Аргентина", "gdp": 630_000_000_000, "population": 46_000_000},
+                {"name": "Перу", "gdp": 260_000_000_000, "population": 34_000_000},
+            ],
+            "Австралия и Океания": [
+                {"name": "Австралия", "gdp": 1_700_000_000_000, "population": 26_000_000},
+                {"name": "Новая Зеландия", "gdp": 250_000_000_000, "population": 5_100_000},
+            ],
+        }
+
+    @commands.command(name='autoreg')
+    @is_registered()  # must have the registered role to use
+    async def autoreg(self, ctx):
+        """Зарегистрировать свою страну (интерактивный мастер)"""
+        # Check if already registered – optional, here we allow overwrite
+        existing = await self.states_col.find_one({'_id': str(ctx.author.id)})
+        if existing:
+            await ctx.send(
+                "⚠️ У вас уже есть зарегистрированное государство! "
+                "Если продолжите, старое будет **заменено**.\n"
+                "Хотите продолжить? (Напишите `да` или `нет`)"
+            )
+            def check(m):
+                return m.author == ctx.author and m.channel == ctx.channel and m.content.lower() in ['да', 'нет']
+            try:
+                reply = await self.bot.wait_for('message', timeout=30.0, check=check)
+            except:
+                return await ctx.send("⏱ Время вышло. Регистрация отменена.")
+            if reply.content.lower() != 'да':
+                return await ctx.send("Регистрация отменена.")
+
+        # Step 1: Choose continent
+        continent_select = Select(
+            placeholder="Выберите континент...",
+            options=[
+                discord.SelectOption(label=cont, emoji="🌍") for cont in self.continents.keys()
+            ]
+        )
+        view = View(timeout=60)
+        view.add_item(continent_select)
+
+        embed = discord.Embed(
+            title="🌍 Регистрация государства",
+            description="**1. Выберите континент**",
+            color=discord.Color.blue()
+        )
+        msg = await ctx.send(embed=embed, view=view)
+
+        try:
+            interaction = await self.bot.wait_for(
+                'interaction',
+                timeout=60.0,
+                check=lambda i: i.user == ctx.author and i.message.id == msg.id
+            )
+        except:
+            return await msg.edit(content="⏱ Время вышло.", view=None)
+
+        continent = interaction.data['values'][0]
+        await interaction.response.defer()
+
+        # Step 2: Choose country
+        countries = self.continents[continent]
+        country_select = Select(
+            placeholder="Выберите страну...",
+            options=[
+                discord.SelectOption(label=c['name'], emoji="🏳️") for c in countries
+            ]
+        )
+        view = View(timeout=60)
+        view.add_item(country_select)
+
+        embed.description = f"**1. Континент:** {continent}\n**2. Выберите страну**"
+        await msg.edit(embed=embed, view=view)
+
+        try:
+            interaction = await self.bot.wait_for(
+                'interaction',
+                timeout=60.0,
+                check=lambda i: i.user == ctx.author and i.message.id == msg.id
+            )
+        except:
+            return await msg.edit(content="⏱ Время вышло.", view=None)
+
+        country_name = interaction.data['values'][0]
+        await interaction.response.defer()
+
+        # Find country data
+        country_data = next(c for c in countries if c['name'] == country_name)
+
+        # Step 3: Confirmation (parameters)
+        embed.description = (
+            f"**Континент:** {continent}\n"
+            f"**Страна:** {country_name}\n\n"
+            "**Начальные параметры:**\n"
+            f"💰 Баланс: **{country_data['gdp'] // 10:,}** (10% от ВВП)\n"
+            f"📈 ВВП: **{country_data['gdp']:,}**\n"
+            f"👥 Население: **{country_data['population']:,}**\n"
+            f"🛡️ Щит на **3 дня**"
+        )
+        view = View(timeout=60)
+        confirm_btn = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.green)
+        cancel_btn = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.red)
+        view.add_item(confirm_btn)
+        view.add_item(cancel_btn)
+
+        await msg.edit(embed=embed, view=view)
+
+        def button_check(i):
+            return i.user == ctx.author and i.message.id == msg.id
+
+        try:
+            interaction = await self.bot.wait_for('interaction', timeout=60.0, check=button_check)
+        except:
+            return await msg.edit(content="⏱ Время вышло.", view=None)
+
+        if interaction.data['custom_id'] == '❌ Отмена':
+            await interaction.response.send_message("Регистрация отменена.", ephemeral=True)
+            return await msg.edit(view=None)
+
+        # Register the state
+        now = datetime.now()
+        await self.states_col.update_one(
+            {'_id': str(ctx.author.id)},
+            {'$set': {
+                'continent': continent,
+                'country': country_name,
+                'gdp': country_data['gdp'],
+                'population': country_data['population'],
+                'balance': country_data['gdp'] // 10,
+                'shield_until': now + timedelta(days=3),
+                'registered_at': now
+            }},
+            upsert=True
+        )
+
+        # Update the economy collection as well? If you want the same values for the user
+        user = await get_user(ctx.author.id)
+        await update_user(ctx.author.id, {
+            'balance': country_data['gdp'] // 10,
+            'gdp': country_data['gdp'],
+            'population': country_data['population'],
+            'last_pop_update': now.timestamp()  # start population growth
+        })
+
+        await interaction.response.send_message(
+            f"🎉 Государство **{country_name}** успешно зарегистрировано! "
+            "Щит действует 3 дня.",
+            ephemeral=True
+        )
+        await msg.edit(view=None)
+
+        # ===== LOAD COGS & RUN =====
 
 @bot.event
 async def setup_hook():
     await bot.add_cog(General(bot))
     await bot.add_cog(Economy(bot))
     await bot.add_cog(Admin(bot))
-
+    await bot.add_cog(Registration(bot))
 if __name__ == '__main__':
     bot.run(TOKEN)
