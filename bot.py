@@ -29,12 +29,11 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # ===== DATABASE HELPERS =====
 
-# Default budget values
 DEFAULT_BUDGETS = {
-    'budget_social': 10,      # социальные расходы
-    'budget_education': 6,    # образование
-    'budget_healthcare': 8,   # здравоохранение
-    'budget_other': 1,        # иные расходы
+    'budget_social': 10,
+    'budget_education': 6,
+    'budget_healthcare': 8,
+    'budget_other': 1,
 }
 
 async def get_user(user_id: int) -> dict:
@@ -48,41 +47,29 @@ async def get_user(user_id: int) -> dict:
             'population': 0,
             'pop_growth_yearly': 2.0,
             'last_pop_update': 0,
-            # Budget fields
             'budget_social': DEFAULT_BUDGETS['budget_social'],
             'budget_education': DEFAULT_BUDGETS['budget_education'],
             'budget_healthcare': DEFAULT_BUDGETS['budget_healthcare'],
             'budget_other': DEFAULT_BUDGETS['budget_other'],
-            # Unhappiness
             'unhappiness': 0.0,
             'last_unhappiness_update': 0,
         }
         await economy_col.insert_one(user)
     else:
         update = {}
-        # Economy fields
-        if 'gdp' not in user:
-            update['gdp'] = 0
-        if 'last_collect' not in user:
-            update['last_collect'] = 0
-        if 'balance' not in user:
-            update['balance'] = 0
-        if 'population' not in user:
-            update['population'] = 0
-        if 'pop_growth_yearly' not in user:
-            update['pop_growth_yearly'] = 2.0
-        if 'last_pop_update' not in user:
-            update['last_pop_update'] = 0
-        # Budget defaults
+        if 'gdp' not in user: update['gdp'] = 0
+        if 'last_collect' not in user: update['last_collect'] = 0
+        if 'balance' not in user: update['balance'] = 0
+        if 'population' not in user: update['population'] = 0
+        if 'pop_growth_yearly' not in user: update['pop_growth_yearly'] = 2.0
+        if 'last_pop_update' not in user: update['last_pop_update'] = 0
         for key, default_val in DEFAULT_BUDGETS.items():
             if key not in user:
                 update[key] = default_val
-        # Unhappiness
         if 'unhappiness' not in user:
             update['unhappiness'] = 0.0
         if 'last_unhappiness_update' not in user:
             update['last_unhappiness_update'] = 0
-
         if update:
             await economy_col.update_one({'_id': str(user_id)}, {'$set': update})
             user.update(update)
@@ -104,37 +91,26 @@ def is_registered():
         return True
     return commands.check(predicate)
 
-# ===== UNHAPPINESS CALCULATION =====
+# ===== ВЫЧИСЛЕНИЕ НЕДОВОЛЬСТВА =====
 
 def calculate_unhappiness_speed(user: dict) -> float:
-    """
-    Возвращает скорость изменения недовольства (%/час).
-    Положительное значение -> рост недовольства.
-    """
     speed = 0.0
-    # Социальные расходы
     d_social = DEFAULT_BUDGETS['budget_social'] - user.get('budget_social', DEFAULT_BUDGETS['budget_social'])
-    speed += d_social * 0.20  # если меньше дефолта, d>0 -> рост; если больше, d<0 -> снижение
-    # Образование
+    speed += d_social * 0.20
     d_edu = DEFAULT_BUDGETS['budget_education'] - user.get('budget_education', DEFAULT_BUDGETS['budget_education'])
     speed += d_edu * 0.20
-    # Здравоохранение
     d_health = DEFAULT_BUDGETS['budget_healthcare'] - user.get('budget_healthcare', DEFAULT_BUDGETS['budget_healthcare'])
     speed += d_health * 0.20
     return speed
 
 async def update_unhappiness(user_id: int, user: dict = None) -> float:
-    """
-    Обновляет недовольство по прошедшему времени и возвращает новое значение.
-    Если передан словарь user, обновит его поля.
-    """
     if user is None:
         user = await get_user(user_id)
 
     current_time = datetime.now().timestamp()
     last_update = user.get('last_unhappiness_update', 0)
     if last_update == 0:
-        last_update = current_time  # если таймера не было, считаем с этого момента
+        last_update = current_time
 
     hours = (current_time - last_update) / 3600.0
     if hours <= 0:
@@ -147,7 +123,6 @@ async def update_unhappiness(user_id: int, user: dict = None) -> float:
     elif new_unhappiness > 100:
         new_unhappiness = 100.0
 
-    # Сохраняем
     await update_user(user_id, {
         'unhappiness': new_unhappiness,
         'last_unhappiness_update': current_time
@@ -285,7 +260,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='collect', aliases=['coll'])
     @is_registered()
     async def collect(self, ctx):
-        """Собрать доход и прирост населения"""
+        """Собрать доход (с учётом бюджета) и прирост населения"""
         user = await get_user(ctx.author.id)
 
         if user['gdp'] == 0:
@@ -303,9 +278,25 @@ class Economy(commands.Cog, name="💰 Экономика"):
             return
 
         income_per_hour = user['gdp'] / 48
-        earned = int(income_per_hour * hours_passed)
-        new_balance = user['balance'] + earned
+        gross_income = int(income_per_hour * hours_passed)
 
+        # Бюджетные вычеты
+        budget_social = user.get('budget_social', DEFAULT_BUDGETS['budget_social'])
+        budget_education = user.get('budget_education', DEFAULT_BUDGETS['budget_education'])
+        budget_healthcare = user.get('budget_healthcare', DEFAULT_BUDGETS['budget_healthcare'])
+        budget_other = DEFAULT_BUDGETS['budget_other']  # всегда 1%
+
+        deduct_social = int(gross_income * budget_social / 100)
+        deduct_education = int(gross_income * budget_education / 100)
+        deduct_healthcare = int(gross_income * budget_healthcare / 100)
+        deduct_other = int(gross_income * budget_other / 100)
+
+        total_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
+        net_income = gross_income - total_deduct
+
+        new_balance = user['balance'] + net_income
+
+        # Прирост населения
         population = user.get('population', 0)
         pop_gained = 0
         new_population = population
@@ -342,8 +333,20 @@ class Economy(commands.Cog, name="💰 Экономика"):
         )
         embed.add_field(name="ВВП", value=f"{user['gdp']:,} 💵", inline=True)
         embed.add_field(name="Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
-        embed.add_field(name="Получено денег", value=f"+{earned:,} 💵", inline=False)
-        embed.add_field(name="Новый баланс", value=f"{new_balance:,} 💵", inline=False)
+        embed.add_field(name="Валовый доход", value=f"{gross_income:,} 💵", inline=False)
+        embed.add_field(
+            name="Вычеты бюджета",
+            value=(
+                f"🏛️ Социальные расходы ({budget_social}%): -{deduct_social:,} 💵\n"
+                f"📚 Образование ({budget_education}%): -{deduct_education:,} 💵\n"
+                f"🏥 Здравоохранение ({budget_healthcare}%): -{deduct_healthcare:,} 💵\n"
+                f"📋 Иные расходы ({budget_other}%): -{deduct_other:,} 💵\n"
+                f"**Всего вычетов: -{total_deduct:,} 💵**"
+            ),
+            inline=False
+        )
+        embed.add_field(name="📌 Чистая прибыль", value=f"+{net_income:,} 💵", inline=False)
+        embed.add_field(name="💰 Новый баланс", value=f"{new_balance:,} 💵", inline=False)
 
         if population > 0:
             if pop_gained > 0:
@@ -516,20 +519,14 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='cab')
     @is_registered()
     async def cab(self, ctx, member: discord.Member = None):
-        """Статистика игрока — ВВП, баланс, население, недовольство, место в топе"""
+        """Статистика игрока — ВВП, баланс, население, недовольство"""
         if member is None:
             member = ctx.author
 
         user = await get_user(member.id)
 
-        # Обновляем недовольство (чтобы показывать актуальное)
+        # Обновляем недовольство
         unhappiness = await update_unhappiness(member.id, user)
-
-        top_users = await economy_col.find().sort('balance', -1).to_list(length=None)
-        position = next(
-            (i + 1 for i, u in enumerate(top_users) if u['_id'] == str(member.id)),
-            None
-        )
 
         income_per_hour = user['gdp'] / 48 if user['gdp'] > 0 else 0
 
@@ -543,7 +540,6 @@ class Economy(commands.Cog, name="💰 Экономика"):
             pending = 0
 
         yearly_pct = user.get('pop_growth_yearly', 2.0)
-        hourly_pct = yearly_pct / 48.0
 
         embed = discord.Embed(
             title=f"📊 Статистика {member.name}",
@@ -554,21 +550,19 @@ class Economy(commands.Cog, name="💰 Экономика"):
         embed.add_field(name="📈 ВВП", value=f"{user['gdp']:,} 💵", inline=True)
         embed.add_field(name="⏱️ Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
         embed.add_field(name="📦 Ожидает коллекта", value=f"{pending:,} 💵", inline=True)
-        embed.add_field(name="🏆 Место в топе", value=f"#{position}" if position else "—", inline=True)
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
 
+        # Блок населения (сразу после ожидания коллекта)
         population = user.get('population', 0)
         if population > 0:
             pop_block = (
                 f"👥 **{population:,} чел.**\n"
-                f"📊 Прирост: **{yearly_pct:.2f}%/игр.год** · **{hourly_pct:.4f}%/ч**"
+                f"📊 Рост Населения в Год: **{yearly_pct:.2f}%**"
             )
         else:
             pop_block = "👥 Население не выдано"
-
         embed.add_field(name="🌍 Население", value=pop_block, inline=False)
 
-        # Недовольство
+        # Недовольство (после населения)
         unhappiness_speed = calculate_unhappiness_speed(user)
         speed_str = f"{unhappiness_speed:+.2f}%/ч" if unhappiness_speed else "0%/ч"
         unhappiness_block = f"😡 **{unhappiness:.2f}%**\n({speed_str})"
@@ -585,7 +579,6 @@ class Budget(commands.Cog, name="📊 Бюджет"):
     def __init__(self, bot):
         self.bot = bot
 
-    # Маппинг названий категорий на поля БД
     CATEGORY_MAP = {
         'социальные-расходы': 'budget_social',
         'соц': 'budget_social',
@@ -621,7 +614,6 @@ class Budget(commands.Cog, name="📊 Бюджет"):
             return
 
         user = await get_user(ctx.author.id)
-        # Обновляем недовольство перед изменением
         await update_unhappiness(ctx.author.id, user)
 
         old_value = user[category_key]
@@ -631,7 +623,6 @@ class Budget(commands.Cog, name="📊 Бюджет"):
 
         await update_user(ctx.author.id, {category_key: percent})
 
-        # Получаем актуальное недовольство после изменения
         new_unhappiness = user.get('unhappiness', 0.0)
         speed = calculate_unhappiness_speed(user)
 
@@ -652,7 +643,6 @@ class Budget(commands.Cog, name="📊 Бюджет"):
             member = ctx.author
 
         user = await get_user(member.id)
-        # Обновляем недовольство
         unhappiness = await update_unhappiness(member.id, user)
 
         embed = discord.Embed(
