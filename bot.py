@@ -131,8 +131,11 @@ class General(commands.Cog, name="⚙️ Основные"):
             description="Все доступные команды бота. Префикс: `!`",
             color=discord.Color.blurple()
         )
+        seen = set()
         for cog_name, cog in self.bot.cogs.items():
-            cmds = cog.get_commands()
+            cmds = [cmd for cmd in cog.get_commands() if cmd.name not in seen]
+            for cmd in cmds:
+                seen.add(cmd.name)
             if cmds:
                 value = "\n".join(
                     f"`!{cmd.name}` — {cmd.help or 'Нет описания'}"
