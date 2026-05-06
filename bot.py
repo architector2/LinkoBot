@@ -35,6 +35,9 @@ async def get_user(user_id: int) -> dict:
             'balance': 0,
             'gdp': 0,
             'last_collect': 0,
+            'population': 0,
+            'pop_growth_yearly': 2.0,
+            'last_pop_update': 0,
         }
         await economy_col.insert_one(user)
     else:
@@ -46,6 +49,12 @@ async def get_user(user_id: int) -> dict:
             update['last_collect'] = 0
         if 'balance' not in user:
             update['balance'] = 0
+        if 'population' not in user:
+            update['population'] = 0
+        if 'pop_growth_yearly' not in user:
+            update['pop_growth_yearly'] = 2.0
+        if 'last_pop_update' not in user:
+            update['last_pop_update'] = 0
         if update:
             await economy_col.update_one({'_id': str(user_id)}, {'$set': update})
             user.update(update)
@@ -57,6 +66,47 @@ async def update_user(user_id: int, data: dict):
         {'$set': data},
         upsert=True
     )
+
+def make_bar(current: float, maximum: float, length: int = 10) -> str:
+    """
+    Возвращает ASCII-прогресс бар.
+    Например: [████████░░] 80%
+    """
+    if maximum <= 0:
+        return f"[{'░' * length}] 0%"
+    ratio = min(current / maximum, 1.0)
+    filled = int(ratio * length)
+    bar = '█' * filled + '░' * (length - filled)
+    percent = ratio * 100
+    return f"[{bar}] {percent:.1f}%"
+
+def calculate_population_growth(user: dict) -> tuple[int, float]:
+    """
+    Рассчитывает накопленный прирост населения.
+    Возвращает (новое_население, часов_прошло).
+    1 игровой год = 48 часов реального времени.
+    """
+    population = user.get('population', 0)
+    if population == 0:
+        return population, 0.0
+
+    last_pop_update = user.get('last_pop_update', 0)
+    if last_pop_update == 0:
+        return population, 0.0
+
+    yearly_pct = user.get('pop_growth_yearly', 2.0)
+    hourly_pct = yearly_pct / 48.0  # % в час (1 игровой год = 48ч)
+
+    current_time = datetime.now().timestamp()
+    hours_passed = (current_time - last_pop_update) / 3600
+
+    if hours_passed < 0.01:
+        return population, 0.0
+
+    growth_multiplier = (1 + hourly_pct / 100) ** hours_passed
+    new_population = int(population * growth_multiplier)
+
+    return new_population, hours_passed
 
 def is_registered():
     """Check decorator - user must have registered role"""
@@ -89,6 +139,8 @@ USAGE_HINTS = {
     'reforms': '❌ Использование: `!reforms <сумма>`\nПример: `!reforms 1000000`',
     'balance': '❌ Использование: `!balance` или `!balance @игрок`',
     'cab': '❌ Использование: `!cab` или `!cab @игрок`',
+    'naselprocent': '❌ Использование: `!naselprocent @игрок <1-100>`\nПример: `!naselprocent @Undervud 3`',
+    'nasel-redakt': '❌ Использование: `!nasel-redakt @игрок <число>`\nПример: `!nasel-redakt @Undervud 1000000` или `!nasel-redakt @Undervud -500000`',
 }
 
 @bot.event
@@ -132,7 +184,11 @@ class General(commands.Cog, name="⚙️ Основные"):
             color=discord.Color.blurple()
         )
         seen = set()
+        # Show only non-admin cogs in !help
+        excluded_cogs = {"👑 Админ"}
         for cog_name, cog in self.bot.cogs.items():
+            if cog_name in excluded_cogs:
+                continue
             cmds = [cmd for cmd in cog.get_commands() if cmd.name not in seen]
             for cmd in cmds:
                 seen.add(cmd.name)
@@ -161,7 +217,7 @@ class General(commands.Cog, name="⚙️ Основные"):
             description="Бот для сервера Военная-политическая-игра",
             color=discord.Color.blue()
         )
-        embed.add_field(name="Версия", value="2.0.0", inline=False)
+        embed.add_field(name="Версия", value="2.1.0", inline=False)
         await ctx.send(embed=embed)
 
 # ===========================
@@ -354,27 +410,49 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='cab')
     @is_registered()
     async def cab(self, ctx, member: discord.Member = None):
-        """Статистика игрока — ВВП, баланс, место в топе"""
+        """Статистика игрока — ВВП, баланс, население, место в топе"""
         if member is None:
             member = ctx.author
 
         user = await get_user(member.id)
 
+        # ── Население: начислить накопленный прирост ──
+        current_time = datetime.now().timestamp()
+        new_population, pop_hours_passed = calculate_population_growth(user)
+        pop_gained = new_population - user.get('population', 0)
+
+        if pop_gained > 0:
+            await update_user(member.id, {
+                'population': new_population,
+                'last_pop_update': current_time
+            })
+            user['population'] = new_population
+
+        # Если население > 0, но last_pop_update ещё не выставлен — выставим
+        if user.get('population', 0) > 0 and user.get('last_pop_update', 0) == 0:
+            await update_user(member.id, {'last_pop_update': current_time})
+
+        # ── Рейтинг по балансу ──
         top_users = await economy_col.find().sort('balance', -1).to_list(length=None)
         position = next(
             (i + 1 for i, u in enumerate(top_users) if u['_id'] == str(member.id)),
             None
         )
 
+        # ── Доход от ВВП ──
         income_per_hour = user['gdp'] / 48 if user['gdp'] > 0 else 0
 
         last_collect = user.get('last_collect', 0)
         if last_collect > 0:
-            hours_since = (datetime.now().timestamp() - last_collect) / 3600
+            hours_since = (current_time - last_collect) / 3600
             hours_since = min(hours_since, 12)
             pending = int(income_per_hour * hours_since)
         else:
             pending = 0
+
+        # ── Прирост населения в % за игровой год ──
+        yearly_pct = user.get('pop_growth_yearly', 2.0)
+        hourly_pct = yearly_pct / 48.0
 
         embed = discord.Embed(
             title=f"📊 Статистика {member.name}",
@@ -386,6 +464,48 @@ class Economy(commands.Cog, name="💰 Экономика"):
         embed.add_field(name="⏱️ Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
         embed.add_field(name="📦 Ожидает коллекта", value=f"{pending:,} 💵", inline=True)
         embed.add_field(name="🏆 Место в топе", value=f"#{position}" if position else "—", inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)  # spacer
+
+        # ── Блок населения со шкалой ──
+        population = user.get('population', 0)
+        last_pop_update = user.get('last_pop_update', 0)
+
+        if population > 0:
+            # Прогресс внутри текущего часа (сколько минут прошло из 60)
+            if last_pop_update > 0:
+                mins_in_hour = ((current_time - last_pop_update) % 3600) / 60
+            else:
+                mins_in_hour = 0
+            hour_bar = make_bar(mins_in_hour, 60, length=12)
+
+            # Прогресс в игровом году (сколько часов из 48)
+            if last_pop_update > 0:
+                hours_in_year = ((current_time - last_pop_update) % (48 * 3600)) / 3600
+            else:
+                hours_in_year = 0
+            year_bar = make_bar(hours_in_year, 48, length=12)
+
+            gained_str = f"+{pop_gained:,} чел." if pop_gained > 0 else "0 чел."
+
+            pop_block = (
+                f"👥 **{population:,} чел.**\n"
+                f"Прирост за сеанс: **{gained_str}**\n"
+                f"\n"
+                f"**Прогресс часа:**\n"
+                f"{hour_bar}\n"
+                f"`{mins_in_hour:.1f} мин из 60`\n"
+                f"\n"
+                f"**Прогресс игр. года (48 ч):**\n"
+                f"{year_bar}\n"
+                f"`{hours_in_year:.1f} ч из 48`\n"
+                f"\n"
+                f"📊 Прирост: **{yearly_pct:.2f}%/игр.год** · **{hourly_pct:.4f}%/ч**"
+            )
+        else:
+            pop_block = "👥 Население не выдано"
+
+        embed.add_field(name="🌍 Население", value=pop_block, inline=False)
+
         await ctx.send(embed=embed)
 
 # ===========================
@@ -397,10 +517,32 @@ class Admin(commands.Cog, name="👑 Админ"):
     def __init__(self, bot):
         self.bot = bot
 
+    @commands.command(name='help-adm')
+    @commands.has_permissions(administrator=True)
+    async def help_admin(self, ctx):
+        """Показать все админ-команды"""
+        embed = discord.Embed(
+            title="👑 Админ-команды",
+            description="Доступны только администраторам. Префикс: `!`",
+            color=discord.Color.red()
+        )
+        cmds = self.get_commands()
+        for cmd in cmds:
+            embed.add_field(
+                name=f"`!{cmd.name}`",
+                value=cmd.help or "Нет описания",
+                inline=False
+            )
+        embed.set_footer(
+            text=f"Запросил: {ctx.author.name}",
+            icon_url=ctx.author.display_avatar.url
+        )
+        await ctx.send(embed=embed)
+
     @commands.command(name='give-vvp')
     @commands.has_permissions(administrator=True)
     async def give_gdp(self, ctx, member: discord.Member, amount: int):
-        """[Админ] Выдать ВВП игроку"""
+        """Выдать ВВП игроку"""
         if amount <= 0:
             await ctx.send("❌ Сумма должна быть больше 0!")
             return
@@ -416,6 +558,69 @@ class Admin(commands.Cog, name="👑 Админ"):
             color=discord.Color.green()
         )
         embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=False)
+        await ctx.send(embed=embed)
+
+    @commands.command(name='naselprocent')
+    @commands.has_permissions(administrator=True)
+    async def nasel_procent(self, ctx, member: discord.Member, percent: float):
+        """Установить годовой % прироста населения игроку (1–100)"""
+        if percent < 1 or percent > 100:
+            await ctx.send("❌ Процент должен быть от **1** до **100**!")
+            return
+
+        await update_user(member.id, {'pop_growth_yearly': percent})
+
+        embed = discord.Embed(
+            title="📊 Прирост населения обновлён",
+            description=f"{member.mention} — новый годовой прирост: **{percent:.2f}%**",
+            color=discord.Color.blue()
+        )
+        hourly = percent / 48
+        embed.add_field(
+            name="Прирост в час",
+            value=f"{hourly:.4f}% (1 игровой год = 48 ч)",
+            inline=False
+        )
+        await ctx.send(embed=embed)
+
+    @commands.command(name='nasel-redakt')
+    @commands.has_permissions(administrator=True)
+    async def nasel_redakt(self, ctx, member: discord.Member, amount: int):
+        """Выдать или забрать население у игрока (минус — забрать)"""
+        user = await get_user(member.id)
+        old_population = user.get('population', 0)
+        new_population = old_population + amount
+
+        if new_population < 0:
+            await ctx.send(
+                f"❌ Нельзя уйти в минус! Текущее население: **{old_population:,}** чел."
+            )
+            return
+
+        current_time = datetime.now().timestamp()
+        update_data = {'population': new_population}
+
+        # Если население впервые стало > 0, выставляем таймер прироста
+        if old_population == 0 and new_population > 0:
+            update_data['last_pop_update'] = current_time
+
+        # Если население обнулили — сбрасываем таймер
+        if new_population == 0:
+            update_data['last_pop_update'] = 0
+
+        await update_user(member.id, update_data)
+
+        action = "получил" if amount >= 0 else "потерял"
+        sign = "+" if amount >= 0 else ""
+        color = discord.Color.green() if amount >= 0 else discord.Color.red()
+
+        embed = discord.Embed(
+            title="👥 Население изменено",
+            description=f"{member.mention} {action} **{sign}{amount:,}** чел.",
+            color=color
+        )
+        embed.add_field(name="Было", value=f"{old_population:,} чел.", inline=True)
+        embed.add_field(name="Стало", value=f"{new_population:,} чел.", inline=True)
         await ctx.send(embed=embed)
 
 # ===== LOAD COGS & RUN =====
