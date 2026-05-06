@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
-import random
 from datetime import datetime
 import motor.motor_asyncio
 
@@ -16,10 +15,14 @@ mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
 db = mongo_client['discord_bot']
 economy_col = db['economy']
 
+# Role ID for registered players
+REGISTERED_ROLE_ID = 1501510805169115176
+
 # ===== BOT SETUP =====
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # ===== DATABASE HELPERS =====
@@ -29,9 +32,9 @@ async def get_user(user_id: int) -> dict:
     if user is None:
         user = {
             '_id': str(user_id),
-            'balance': 1000,
-            'last_work': 0,
-            'last_daily': 0
+            'balance': 0,
+            'gdp': 0,
+            'last_collect': 0,
         }
         await economy_col.insert_one(user)
     return user
@@ -43,9 +46,15 @@ async def update_user(user_id: int, data: dict):
         upsert=True
     )
 
-async def get_balance(user_id: int) -> int:
-    user = await get_user(user_id)
-    return user.get('balance', 1000)
+def is_registered():
+    """Check decorator - user must have registered role"""
+    async def predicate(ctx):
+        role = ctx.guild.get_role(REGISTERED_ROLE_ID)
+        if role is None or role not in ctx.author.roles:
+            await ctx.send("❌ Ты не зарегистрирован! Открой тикет для регистрации.")
+            return False
+        return True
+    return commands.check(predicate)
 
 # ===== EVENTS =====
 
@@ -72,6 +81,8 @@ async def on_command_error(ctx, error):
         await ctx.send("❌ Неверный аргумент. Используйте `!help` для подсказки.")
     elif isinstance(error, commands.CommandOnCooldown):
         await ctx.send(f"⏰ Подожди {error.retry_after:.1f} секунд!")
+    elif isinstance(error, commands.CheckFailure):
+        pass
     else:
         print(f"Error: {error}")
 
@@ -80,14 +91,13 @@ async def on_command_error(ctx, error):
 # ===========================
 
 class General(commands.Cog, name="⚙️ Основные"):
-    """General commands"""
 
     def __init__(self, bot):
         self.bot = bot
 
     @commands.command(name='help')
     async def help_command(self, ctx):
-        """Show all available commands"""
+        """Показать все команды"""
         embed = discord.Embed(
             title="📖 Список команд",
             description="Все доступные команды бота. Префикс: `!`",
@@ -112,20 +122,15 @@ class General(commands.Cog, name="⚙️ Основные"):
         """Проверить задержку бота"""
         await ctx.send(f'Pong! 🏓 Latency: {round(self.bot.latency * 1000)}ms')
 
-    @commands.command(name='hello')
-    async def hello(self, ctx):
-        """Поздороваться с ботом"""
-        await ctx.send(f'Привет, {ctx.author.mention}! 👋')
-
     @commands.command(name='info')
     async def info(self, ctx):
         """Информация о боте"""
         embed = discord.Embed(
-            title="Bot Information",
+            title="LinkoBot",
             description="Бот для сервера Военная-политическая-игра",
             color=discord.Color.blue()
         )
-        embed.add_field(name="Версия", value="1.0.0", inline=False)
+        embed.add_field(name="Версия", value="2.0.0", inline=False)
         await ctx.send(embed=embed)
 
 # ===========================
@@ -133,92 +138,107 @@ class General(commands.Cog, name="⚙️ Основные"):
 # ===========================
 
 class Economy(commands.Cog, name="💰 Экономика"):
-    """Economy commands"""
 
     def __init__(self, bot):
         self.bot = bot
 
     @commands.command(name='balance')
+    @is_registered()
     async def balance(self, ctx, member: discord.Member = None):
         """Проверить баланс"""
         if member is None:
             member = ctx.author
-        bal = await get_balance(member.id)
+        user = await get_user(member.id)
         embed = discord.Embed(
             title=f"💰 Баланс {member.name}",
-            description=f"Баланс: **{bal}** 💵",
+            description=f"Баланс: **{user['balance']:,}** 💵",
             color=discord.Color.gold()
         )
         await ctx.send(embed=embed)
 
-    @commands.command(name='work')
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def work(self, ctx):
-        """Поработать и заработать деньги (раз в час)"""
+    @commands.command(name='collect', aliases=['coll'])
+    @is_registered()
+    async def collect(self, ctx):
+        """Собрать доход на основе ВВП (макс 12 часов)"""
         user = await get_user(ctx.author.id)
-        current_time = datetime.now().timestamp()
-        last_work = user.get('last_work', 0)
 
-        if current_time - last_work < 3600:
-            remaining = int(3600 - (current_time - last_work))
-            mins = remaining // 60
-            await ctx.send(f"⏰ Ты уже работал! Приди через {mins} минут.")
+        if user['gdp'] == 0:
+            await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
             return
 
-        earned = random.randint(100, 500)
+        current_time = datetime.now().timestamp()
+        last_collect = user.get('last_collect', 0)
+
+        hours_passed = (current_time - last_collect) / 3600
+        hours_passed = min(hours_passed, 12)
+
+        if hours_passed < 0.0167:
+            await ctx.send("⏰ Подожди немного перед следующим коллектом!")
+            return
+
+        income_per_hour = user['gdp'] / 48
+        earned = int(income_per_hour * hours_passed)
         new_balance = user['balance'] + earned
+
         await update_user(ctx.author.id, {
             'balance': new_balance,
-            'last_work': current_time
+            'last_collect': current_time
         })
 
-        activities = [
-            "срубил дерево 🌳",
-            "поймал рыбу 🎣",
-            "отремонтировал дорогу 🛠️",
-            "собрал урожай 🌾",
-            "выполнил боевое задание ⚔️"
-        ]
-
         embed = discord.Embed(
-            title="💼 Работа",
-            description=f"Ты {random.choice(activities)}",
+            title="💵 Коллект",
+            description=f"Ты собрал доход за **{hours_passed:.1f}** ч.",
             color=discord.Color.green()
         )
-        embed.add_field(name="Заработано", value=f"+{earned} 💵", inline=False)
-        embed.add_field(name="Новый баланс", value=f"{new_balance} 💵", inline=False)
+        embed.add_field(name="ВВП", value=f"{user['gdp']:,} 💵", inline=True)
+        embed.add_field(name="Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
+        embed.add_field(name="Получено", value=f"+{earned:,} 💵", inline=False)
+        embed.add_field(name="Новый баланс", value=f"{new_balance:,} 💵", inline=False)
         await ctx.send(embed=embed)
 
-    @commands.command(name='daily')
-    @commands.cooldown(1, 5, commands.BucketType.user)
-    async def daily(self, ctx):
-        """Получить ежедневную награду (500 💵)"""
-        user = await get_user(ctx.author.id)
-        current_time = datetime.now().timestamp()
-        last_daily = user.get('last_daily', 0)
-
-        if current_time - last_daily < 86400:
-            remaining = int(86400 - (current_time - last_daily))
-            hours = remaining // 3600
-            await ctx.send(f"⏰ Ты уже получал награду! Приди через {hours} часов.")
+    @commands.command(name='reforms')
+    @is_registered()
+    async def reforms(self, ctx, amount: int):
+        """Вложить деньги в ВВП (макс x2 от текущего ВВП)"""
+        if amount <= 0:
+            await ctx.send("❌ Сумма должна быть больше 0!")
             return
 
-        reward = 500
-        new_balance = user['balance'] + reward
+        user = await get_user(ctx.author.id)
+
+        if user['gdp'] == 0:
+            await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
+            return
+
+        max_investment = user['gdp'] * 2
+        if amount > max_investment:
+            await ctx.send(f"❌ Максимальная инвестиция: **{max_investment:,}** 💵 (x2 от ВВП)")
+            return
+
+        if user['balance'] < amount:
+            await ctx.send(f"❌ Недостаточно денег! Баланс: {user['balance']:,} 💵")
+            return
+
+        new_gdp = user['gdp'] + amount
+        new_balance = user['balance'] - amount
+
         await update_user(ctx.author.id, {
-            'balance': new_balance,
-            'last_daily': current_time
+            'gdp': new_gdp,
+            'balance': new_balance
         })
 
         embed = discord.Embed(
-            title="🎁 Ежедневная награда",
-            description=f"Ты получил **{reward}** 💵",
-            color=discord.Color.gold()
+            title="🏗️ Реформы",
+            description=f"{ctx.author.mention} вложил **{amount:,}** 💵 в ВВП",
+            color=discord.Color.blue()
         )
-        embed.add_field(name="Баланс", value=f"{new_balance} 💵", inline=False)
+        embed.add_field(name="Старый ВВП", value=f"{user['gdp']:,} 💵", inline=True)
+        embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=True)
+        embed.add_field(name="Баланс", value=f"{new_balance:,} 💵", inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(name='pay')
+    @is_registered()
     @commands.cooldown(1, 3, commands.BucketType.user)
     async def pay(self, ctx, member: discord.Member, amount: int):
         """Перевести деньги другому игроку"""
@@ -234,7 +254,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         sender = await get_user(ctx.author.id)
         if sender['balance'] < amount:
-            await ctx.send(f"❌ У тебя недостаточно денег! Баланс: {sender['balance']} 💵")
+            await ctx.send(f"❌ Недостаточно денег! Баланс: {sender['balance']:,} 💵")
             return
 
         receiver = await get_user(member.id)
@@ -243,19 +263,20 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         embed = discord.Embed(
             title="💸 Перевод денег",
-            description=f"{ctx.author.mention} отправил {member.mention} **{amount}** 💵",
+            description=f"{ctx.author.mention} отправил {member.mention} **{amount:,}** 💵",
             color=discord.Color.blue()
         )
         await ctx.send(embed=embed)
 
     @commands.command(name='leaderboard')
+    @is_registered()
     @commands.cooldown(1, 10, commands.BucketType.guild)
     async def leaderboard(self, ctx):
         """Топ-10 богатейших игроков"""
         top_users = await economy_col.find().sort('balance', -1).limit(10).to_list(length=10)
 
         if not top_users:
-            await ctx.send("📊 На сервере нет данных об экономике!")
+            await ctx.send("📊 Нет данных!")
             return
 
         description = ""
@@ -265,7 +286,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 name = user.name
             except:
                 name = f"User#{user_data['_id']}"
-            description += f"{i}. {name} — **{user_data['balance']}** 💵\n"
+            description += f"{i}. {name} — **{user_data['balance']:,}** 💵\n"
 
         embed = discord.Embed(
             title="🏆 Рейтинг богачей",
@@ -274,65 +295,80 @@ class Economy(commands.Cog, name="💰 Экономика"):
         )
         await ctx.send(embed=embed)
 
+    @commands.command(name='cab')
+    @is_registered()
+    async def cab(self, ctx, member: discord.Member = None):
+        """Статистика игрока — ВВП, баланс, место в топе"""
+        if member is None:
+            member = ctx.author
+
+        user = await get_user(member.id)
+
+        top_users = await economy_col.find().sort('balance', -1).to_list(length=None)
+        position = next(
+            (i + 1 for i, u in enumerate(top_users) if u['_id'] == str(member.id)),
+            None
+        )
+
+        income_per_hour = user['gdp'] / 48 if user['gdp'] > 0 else 0
+
+        last_collect = user.get('last_collect', 0)
+        if last_collect > 0:
+            hours_since = (datetime.now().timestamp() - last_collect) / 3600
+            hours_since = min(hours_since, 12)
+            pending = int(income_per_hour * hours_since)
+        else:
+            pending = 0
+
+        embed = discord.Embed(
+            title=f"📊 Статистика {member.name}",
+            color=discord.Color.blurple()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="💰 Баланс", value=f"{user['balance']:,} 💵", inline=True)
+        embed.add_field(name="📈 ВВП", value=f"{user['gdp']:,} 💵", inline=True)
+        embed.add_field(name="⏱️ Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
+        embed.add_field(name="📦 Ожидает коллекта", value=f"{pending:,} 💵", inline=True)
+        embed.add_field(name="🏆 Место в топе", value=f"#{position}" if position else "—", inline=True)
+        await ctx.send(embed=embed)
+
 # ===========================
-# 🎮 COG: GAMES
+# 👑 COG: ADMIN
 # ===========================
 
-class Games(commands.Cog, name="🎮 Игры"):
-    """Game commands"""
+class Admin(commands.Cog, name="👑 Админ"):
 
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name='dice')
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def dice(self, ctx, bet: int):
-        """Кинуть кубик — выиграй x2 при ролле > 50"""
-        if bet <= 0:
-            await ctx.send("❌ Ставка должна быть больше 0!")
-            return
-        if bet > 10000:
-            await ctx.send("❌ Максимальная ставка: 10,000 💵")
+    @commands.command(name='give-vvp')
+    @commands.has_permissions(administrator=True)
+    async def give_gdp(self, ctx, member: discord.Member, amount: int):
+        """[Админ] Выдать ВВП игроку"""
+        if amount <= 0:
+            await ctx.send("❌ Сумма должна быть больше 0!")
             return
 
-        user = await get_user(ctx.author.id)
-        if user['balance'] < bet:
-            await ctx.send(f"❌ У тебя недостаточно денег! Баланс: {user['balance']} 💵")
-            return
+        user = await get_user(member.id)
+        new_gdp = user['gdp'] + amount
 
-        roll = random.randint(1, 100)
+        await update_user(member.id, {'gdp': new_gdp})
 
-        if roll > 50:
-            new_balance = user['balance'] + bet
-            await update_user(ctx.author.id, {'balance': new_balance})
-            embed = discord.Embed(
-                title="🎲 Ты выиграл!",
-                description=f"Ролл: **{roll}** 🎉",
-                color=discord.Color.green()
-            )
-            embed.add_field(name="Выигрыш", value=f"+{bet} 💵", inline=False)
-        else:
-            new_balance = user['balance'] - bet
-            await update_user(ctx.author.id, {'balance': new_balance})
-            embed = discord.Embed(
-                title="🎲 Ты проиграл...",
-                description=f"Ролл: **{roll}** 😢",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="Проигрыш", value=f"-{bet} 💵", inline=False)
-
-        embed.add_field(name="Новый баланс", value=f"{new_balance} 💵", inline=False)
+        embed = discord.Embed(
+            title="📈 ВВП выдан",
+            description=f"{member.mention} получил **{amount:,}** ВВП",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=False)
         await ctx.send(embed=embed)
 
 # ===== LOAD COGS & RUN =====
 
-async def setup():
+@bot.event
+async def setup_hook():
     await bot.add_cog(General(bot))
     await bot.add_cog(Economy(bot))
-    await bot.add_cog(Games(bot))
-
-import asyncio
-asyncio.run(setup())
+    await bot.add_cog(Admin(bot))
 
 if __name__ == '__main__':
     bot.run(TOKEN)
