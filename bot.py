@@ -83,14 +83,30 @@ async def on_message(message):
         return
     await bot.process_commands(message)
 
+USAGE_HINTS = {
+    'pay': '❌ Использование: `!pay @игрок <сумма>`\nПример: `!pay @Undervud 5000`',
+    'give-vvp': '❌ Использование: `!give-vvp @игрок <сумма>`\nПример: `!give-vvp @Undervud 1000000000`',
+    'reforms': '❌ Использование: `!reforms <сумма>`\nПример: `!reforms 1000000`',
+    'balance': '❌ Использование: `!balance` или `!balance @игрок`',
+    'cab': '❌ Использование: `!cab` или `!cab @игрок`',
+}
+
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         await ctx.send("❌ Команда не найдена. Используйте `!help`")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send("❌ Не хватает аргументов. Используйте `!help` для подсказки.")
+        hint = USAGE_HINTS.get(ctx.command.name)
+        if hint:
+            await ctx.send(hint)
+        else:
+            await ctx.send("❌ Не хватает аргументов. Используйте `!help` для подсказки.")
     elif isinstance(error, commands.BadArgument):
-        await ctx.send("❌ Неверный аргумент. Используйте `!help` для подсказки.")
+        hint = USAGE_HINTS.get(ctx.command.name)
+        if hint:
+            await ctx.send(hint)
+        else:
+            await ctx.send("❌ Неверный аргумент. Используйте `!help` для подсказки.")
     elif isinstance(error, commands.CommandOnCooldown):
         await ctx.send(f"⏰ Подожди {error.retry_after:.1f} секунд!")
     elif isinstance(error, commands.CheckFailure):
@@ -210,8 +226,11 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
     @commands.command(name='reforms')
     @is_registered()
-    async def reforms(self, ctx, amount: int):
+    async def reforms(self, ctx, amount: int = None):
         """Вложить деньги в ВВП (макс x2 от текущего ВВП)"""
+        if amount is None:
+            await ctx.send("❌ Укажи сумму! Пример: `!reforms 1000000`")
+            return
         if amount <= 0:
             await ctx.send("❌ Сумма должна быть больше 0!")
             return
