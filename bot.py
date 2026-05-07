@@ -2515,12 +2515,78 @@ class AllyCreateModal(Modal):
         self.user_id = user_id
 
     name = TextInput(label="Название альянса", placeholder="Великий Союз", max_length=80)
-    description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Могучий альянс...", max_length=500)
-    ally_type = TextInput(label="Тип (Военный/Экономический/Военно-Экономический)", placeholder="Военный", max_length=30)
+    description = TextInput(label="Описание", style=discord.TextStyle.long,
+                            placeholder="Могучий альянс...", max_length=500)
+    ally_type = TextInput(label="Тип (Военный/Экономический/Военно-Экономический)",
+                          placeholder="Военный", max_length=30)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # 1. Мгновенно откладываем ответ — Discord больше не покажет "This interaction failed"
         await interaction.response.defer(ephemeral=True)
-        # ... остальная логика (см. полный фикс)
+
+        name = self.name.value.strip()
+        desc = self.description.value.strip()
+        atype = self.ally_type.value.strip()
+
+        # 2. Создаём запись в БД
+        alliance_data = {
+            'owner_id': str(self.user_id),
+            'name': name,
+            'description': desc,
+            'type': atype,
+            'members': [],
+            'treasury': 0,
+            'tax_percent': 2,
+            'image_url': None,
+            'thread_id': None,
+            'created_at': datetime.now().timestamp()
+        }
+
+        try:
+            result = await alliances_col.insert_one(alliance_data)
+            alliance_data['_id'] = result.inserted_id
+
+            # 3. Привязываем владельца немедленно
+            await update_user(self.user_id,
+                              {'alliance_id': result.inserted_id, 'alliance_role': 'owner'})
+
+            # 4. Пытаемся создать ветку (если не получится — альянс всё равно сохранён)
+            thread_msg = ""
+            channel = interaction.guild.get_channel(ALLIANCES_CHANNEL_ID)
+            if channel:
+                try:
+                    thread = await channel.create_thread(
+                        name=f"🏛️ {name}",
+                        auto_archive_duration=1440,
+                        reason=f"Альянс {name}"
+                    )
+                    # сохраняем ID ветки в БД
+                    await alliances_col.update_one(
+                        {'_id': result.inserted_id},
+                        {'$set': {'thread_id': thread.id}}
+                    )
+                    creator = interaction.guild.get_member(self.user_id)
+                    if creator:
+                        await thread.add_user(creator)
+                    thread_msg = f"Ветка создана: {thread.mention}"
+                except Exception as e:
+                    thread_msg = f"⚠️ Не удалось создать ветку: {e}"
+            else:
+                thread_msg = "⚠️ Канал альянсов не найден. Альянс сохранён, но без ветки."
+
+            # 5. Финальный ответ
+            embed = discord.Embed(
+                title=f"✅ Альянс «{name}» создан!",
+                description=thread_msg or "Альянс готов.",
+                color=discord.Color.green()
+            )
+            await interaction.edit_original_response(embed=embed)
+
+        except Exception as e:
+            # Если что-то упало на уровне БД — сообщаем
+            await interaction.edit_original_response(
+                content=f"❌ Ошибка при создании альянса: {e}"
+            )
 
 class AllyInfoView(View):
     def __init__(self, cog: "Alliances", alliance: dict, user_id: int, is_owner: bool, bot):
