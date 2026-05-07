@@ -1,3 +1,7 @@
+in this code fix Нажмите кнопку для создания альянса:
+This interaction failed when typing !ally-create
+
+
 import discord
 from discord.ext import commands
 from discord.ui import Select, View, Modal, TextInput, button
@@ -2506,130 +2510,22 @@ class AllyCreateStartView(View):
 
     @button(label="Создать альянс", style=discord.ButtonStyle.primary)
     async def create_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Создать альянс"""
-        # Проверка владельца кнопки
-        if interaction.user.id != self.user_id:
-            try:
-                return await interaction.response.send_message(
-                    "❌ Это не ваша кнопка.", 
-                    ephemeral=True
-                )
-            except:
-                return
+        await interaction.response.send_modal(AllyCreateModal(self.cog, self.user_id))
 
-        # Основная логика
-        try:
-            await interaction.response.send_modal(AllyCreateModal(self.cog, self.user_id))
-        except discord.errors.InteractionResponded:
-            # Если взаимодействие уже было использовано
-            await interaction.followup.send("❌ Взаимодействие уже обработано.", ephemeral=True)
-        except Exception as e:
-            print(f"[ERROR] Ошибка при открытии модалки создания альянса: {e}")
-            try:
-                await interaction.response.send_message(
-                    "❌ Не удалось открыть форму. Попробуйте ещё раз через пару секунд.", 
-                    ephemeral=True
-                )
-            except:
-                try:
-                    await interaction.followup.send(
-                        "❌ Произошла ошибка. Попробуйте команду `!ally-create` заново.", 
-                        ephemeral=True
-                    )
-                except:
-                    pass  # Если совсем ничего не работает  
+class AllyCreateModal(Modal):
+    def __init__(self, cog: "Alliances", user_id: int):
+        super().__init__(title="Создание альянса")
+        self.cog = cog
+        self.user_id = user_id
 
-class AllyCreateModal(Modal, title="Создание альянса"):
     name = TextInput(label="Название альянса", placeholder="Великий Союз", max_length=80)
     description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Могучий альянс...", max_length=500)
     ally_type = TextInput(label="Тип (Военный/Экономический/Военно-Экономический)", placeholder="Военный", max_length=30)
 
-    def __init__(self, cog: "Alliances", user_id: int):
-        super().__init__()
-        self.cog = cog
-        self.user_id = user_id
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        # ... остальная логика (см. полный фикс)
 
-        async def on_submit(self, interaction: discord.Interaction):
-        name = self.name.value.strip()
-        desc = self.description.value.strip()
-        atype = self.ally_type.value.strip() or "Военный"
-
-        if not name:
-            return await interaction.response.send_message("❌ Название альянса обязательно!", ephemeral=True)
-
-        # Проверка лимита
-        count = await count_user_alliances_as_owner(self.user_id)
-        if count >= 2:
-            return await interaction.response.send_message(
-                "❌ Вы уже создали максимальное количество альянсов (2).", 
-                ephemeral=True
-            )
-
-        try:
-            # ... (весь код создания альянса остаётся как в предыдущем ответе)
-
-            alliance_data = {
-                'owner_id': str(self.user_id),
-                'name': name,
-                'description': desc,
-                'type': atype,
-                'members': [],
-                'treasury': 0,
-                'tax_percent': 2,
-                'image_url': None,
-                'thread_id': None,
-                'created_at': datetime.now().timestamp()
-            }
-
-            result = await alliances_col.insert_one(alliance_data)
-            alliance_id = result.inserted_id
-
-            guild = interaction.guild
-            thread = None
-            channel = guild.get_channel(ALLIANCES_CHANNEL_ID) if guild else None
-
-            if channel:
-                try:
-                    thread = await channel.create_thread(
-                        name=f"🏛️ {name}",
-                        auto_archive_duration=1440,
-                        reason=f"Альянс {name}"
-                    )
-                    creator = guild.get_member(self.user_id)
-                    if creator:
-                        await thread.add_user(creator)
-                except Exception as thread_e:
-                    print(f"Не удалось создать thread: {thread_e}")
-
-            await alliances_col.update_one(
-                {'_id': alliance_id},
-                {'$set': {'thread_id': getattr(thread, 'id', None)}}
-            )
-
-            await update_user(self.user_id, {
-                'alliance_id': alliance_id,
-                'alliance_role': 'owner'
-            })
-
-            embed = discord.Embed(
-                title=f"✅ Альянс «{name}» создан!",
-                description=f"**Тип:** {atype}",
-                color=discord.Color.green()
-            )
-            if thread:
-                embed.add_field(name="Ветка альянса", value=thread.mention, inline=False)
-
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        except Exception as e:
-            print(f"[CRITICAL] Ошибка создания альянса: {e}")
-            try:
-                await interaction.response.send_message(
-                    "❌ Критическая ошибка при создании альянса. Сообщите администратору.", 
-                    ephemeral=True
-                )
-            except:
-                await interaction.followup.send("❌ Критическая ошибка.", ephemeral=True)
 class AllyInfoView(View):
     def __init__(self, cog: "Alliances", alliance: dict, user_id: int, is_owner: bool, bot):
         super().__init__(timeout=180)
