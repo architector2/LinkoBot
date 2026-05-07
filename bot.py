@@ -20,10 +20,12 @@ economy_col = db['economy']
 reform_links_col = db['reform_links']
 vehicles_col = db['vehicles']
 licenses_col = db['licenses']
-inventory_col = db['inventory']          # новая коллекция для инвентаря
+inventory_col = db['inventory']
 
-# ID роли зарегистрированного игрока
+# ID ролей
 REGISTERED_ROLE_ID = 1501510805169115176
+UNREGISTERED_ROLE_ID = 1141339127367880764
+COUNTRY_ROLE_ID = 1141340397558321313
 
 # ===== НАСТРОЙКИ БОТА =====
 intents = discord.Intents.default()
@@ -33,10 +35,10 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД =====
 DEFAULT_BUDGETS = {
-    'budget_social': 10,      # социальные расходы
-    'budget_education': 6,    # образование
-    'budget_healthcare': 8,   # здравоохранение
-    'budget_other': 1,        # иные расходы (неизменяемые)
+    'budget_social': 10,
+    'budget_education': 6,
+    'budget_healthcare': 8,
+    'budget_other': 1,
 }
 
 async def get_user(user_id: int) -> dict:
@@ -169,37 +171,34 @@ async def on_message(message):
         return
     await bot.process_commands(message)
 
- USAGE_HINTS = {
-    # Экономика
+USAGE_HINTS = {
     'balance': '❌ Использование: `!balance` или `!balance @игрок`',
     'collect': '❌ Команда `!collect` не требует аргументов.\nПросто напиши `!collect` для сбора дохода.',
     'reforms': '❌ Использование: `!reforms <сумма> <ссылка на сообщение из канала реформ>`\nПример: `!reforms 1000000 https://discord.com/channels/...`',
     'pay': '❌ Использование: `!pay @игрок <сумма>`\nПример: `!pay @Undervud 5000`',
     'leaderboard': '❌ Команда `!leaderboard` не требует аргументов.\nПросто напиши `!leaderboard`.',
     'cab': '❌ Использование: `!cab` или `!cab @игрок`',
-
-    # Бюджет
     'budjet': '❌ Использование: `!budjet <категория> <процент>`\nКатегории: `социальные-расходы`, `образование`, `здравоохранение`\nПример: `!budjet образование 10`',
     'budjet-info': '❌ Использование: `!budjet-info` или `!budjet-info @игрок`',
-
-    # Магазин и техника
     'shop': '❌ Команда `!shop` не требует аргументов.\nПросто напиши `!shop`.',
     'add-vehicle': '❌ Команда `!add-vehicle` не требует аргументов.\nПросто напиши `!add-vehicle` и следуй инструкциям.',
     'give-lic': '❌ Использование: `!give-lic @игрок <название техники или all>`\nПример: `!give-lic @Undervud Т-90` или `!give-lic @Undervud all`',
     'buy': '❌ Использование: `!buy <количество> <название техники>`\nПример: `!buy 3 Т-90`\nПри частичном совпадении будет предложен выбор.',
     'inv': '❌ Команда `!inv` не требует аргументов.\nПросто напиши `!inv` — инвентарь придёт в ЛС.',
     'invsee': '❌ Использование: `!invsee @игрок`',
-    'take-item': '❌ Использование: `!take-item @игрок <количество> <название>`\nПример: `!take-item @Undervud 2 Т-90`',
+    'take-item': '❌ Использование: `!take-item @игрок <количество> <название или часть названия>`\nПример: `!take-item @Undervud 100 Т-`',
     'give-item': '❌ Использование: `!give-item @игрок <количество> <название>`\nПример: `!give-item @Undervud 5 Т-90`',
-
-    # Администрирование
+    'use': '❌ Использование: `!use <количество> <название предмета>`\nПример: `!use 50 Т-90`',
     'give-vvp': '❌ Использование: `!give-vvp @игрок <сумма>`\nПример: `!give-vvp @Undervud 1000000000`',
     'naselprocent': '❌ Использование: `!naselprocent @игрок <1-100>`\nПример: `!naselprocent @Undervud 3`',
     'nasel-redakt': '❌ Использование: `!nasel-redakt @игрок <число>`\nПример: `!nasel-redakt @Undervud 1000000` или `!nasel-redakt @Undervud -500000`',
     'happines': '❌ Использование: `!happines @игрок <процент>`\nПример: `!happines @Undervud 80`',
     'reg': '❌ Использование: `!reg @игрок <название страны>`\nПример: `!reg @Undervud Франция`',
+    'unreg': '❌ Использование: `!unreg @игрок`',
     'delete-vehicle': '❌ Использование: `!delete-vehicle <название или часть названия>`\nПример: `!delete-vehicle Т-90`',
+    'players-country': '❌ Команда `!players-country` не требует аргументов.',
 }
+
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
@@ -264,8 +263,16 @@ class General(commands.Cog, name="⚙️ Основные"):
     async def info(self, ctx):
         """Информация о боте"""
         embed = discord.Embed(title="LinkoBot", description="Бот для сервера Военная-политическая-игра", color=discord.Color.blue())
-        embed.add_field(name="Версия", value="2.4.0", inline=False)
+        embed.add_field(name="Версия", value="2.5.0", inline=False)
         await ctx.send(embed=embed)
+
+    @commands.command(name='players-country')
+    @is_registered()
+    async def players_country(self, ctx):
+        """Показать список игроков по государствам и других"""
+        view = PlayersCountryView(ctx.guild)
+        embed = await view.build_embed('states')
+        view.message = await ctx.send(embed=embed, view=view)
 
 # ===========================
 # 💰 COG: ЭКОНОМИКА
@@ -723,13 +730,68 @@ class Admin(commands.Cog, name="👑 Админ"):
         embed = discord.Embed(title="😡 Недовольство изменено", description=f"{member.mention} теперь имеет недовольство **{percent:.1f}%**", color=discord.Color.red())
         await ctx.send(embed=embed)
 
-    # ----- Регистрация страны -----
+    # ----- Регистрация страны (обновлено) -----
     @commands.command(name='reg')
     @commands.has_permissions(administrator=True)
     async def reg(self, ctx, member: discord.Member, *, country_name: str):
         """Зарегистрировать страну за игроком (напр. !reg @User Франция)"""
+        # Обновляем данные
         await update_user(member.id, {'country': country_name.strip()})
+
+        # Управление ролями
+        reg_role = ctx.guild.get_role(REGISTERED_ROLE_ID)
+        unreg_role = ctx.guild.get_role(UNREGISTERED_ROLE_ID)
+        country_role = ctx.guild.get_role(COUNTRY_ROLE_ID)
+
+        if reg_role:
+            await member.add_roles(reg_role)
+        if unreg_role:
+            await member.remove_roles(unreg_role)
+        if country_role:
+            await member.add_roles(country_role)
+
         await ctx.send(f"✅ Игрок {member.mention} теперь представляет страну **{country_name.strip()}**.")
+
+    # ----- Сброс регистрации (новая) -----
+    @commands.command(name='unreg')
+    @commands.has_permissions(administrator=True)
+    async def unreg(self, ctx, member: discord.Member):
+        """Сбросить всю статистику игрока и снять регистрацию страны"""
+        # Сброс экономических данных
+        default_user = {
+            'balance': 0,
+            'gdp': 0,
+            'last_collect': 0,
+            'population': 0,
+            'pop_growth_yearly': 2.0,
+            'last_pop_update': 0,
+            'budget_social': DEFAULT_BUDGETS['budget_social'],
+            'budget_education': DEFAULT_BUDGETS['budget_education'],
+            'budget_healthcare': DEFAULT_BUDGETS['budget_healthcare'],
+            'budget_other': DEFAULT_BUDGETS['budget_other'],
+            'unhappiness': 0.0,
+            'last_unhappiness_update': 0,
+            'country': None,
+        }
+        await update_user(member.id, default_user)
+
+        # Очистка инвентаря и лицензий
+        await inventory_col.delete_many({'user_id': str(member.id)})
+        await licenses_col.delete_many({'user_id': str(member.id)})
+
+        # Смена ролей
+        reg_role = ctx.guild.get_role(REGISTERED_ROLE_ID)
+        unreg_role = ctx.guild.get_role(UNREGISTERED_ROLE_ID)
+        country_role = ctx.guild.get_role(COUNTRY_ROLE_ID)
+
+        if reg_role:
+            await member.remove_roles(reg_role)
+        if unreg_role:
+            await member.add_roles(unreg_role)
+        if country_role:
+            await member.remove_roles(country_role)
+
+        await ctx.send(f"✅ Статистика игрока {member.mention} полностью сброшена, роли обновлены.")
 
     # ----- Удаление техники -----
     @commands.command(name='delete-vehicle', aliases=['del-vehicle'])
@@ -771,15 +833,49 @@ class Admin(commands.Cog, name="👑 Админ"):
     @commands.command(name='take-item')
     @commands.has_permissions(administrator=True)
     async def take_item(self, ctx, member: discord.Member, quantity: int, *, item_name: str):
-        """Забрать предмет у игрока"""
+        """Забрать предмет у игрока (с частичным поиском и автоподбором количества)"""
         if quantity <= 0:
             await ctx.send("❌ Количество должно быть больше 0.")
             return
-        success = await remove_item(member.id, item_name.strip(), quantity)
-        if success:
-            await ctx.send(f"✅ У {member.mention} убрано **{quantity}x {item_name}**.")
+
+        items = await get_inventory(member.id)
+        if not items:
+            await ctx.send("❌ У игрока нет предметов.")
+            return
+
+        regex = re.compile(re.escape(item_name.strip()), re.IGNORECASE)
+        matches = [it for it in items if regex.search(it['item_name'])]
+
+        if not matches:
+            await ctx.send("❌ У игрока нет предметов с таким названием.")
+            return
+
+        if len(matches) == 1:
+            await self._process_take_removal(ctx, member, matches[0], quantity, interaction=None)
         else:
-            await ctx.send(f"❌ Не удалось забрать: недостаточно предметов или предмет не найден.")
+            options = [discord.SelectOption(label=it['item_name'][:100]) for it in matches[:25]]
+            select = Select(placeholder="Выберите предмет для изъятия...", options=options)
+            view = TakeSelectView(ctx.author.id, member, quantity, matches, select, self)
+            await ctx.send("Найдено несколько предметов. Выберите:", view=view)
+
+    async def _process_take_removal(self, ctx, member, item: dict, requested_qty: int, interaction=None):
+        available = item['quantity']
+        take_qty = min(requested_qty, available)
+        success = await remove_item(member.id, item['item_name'], take_qty)
+        if success:
+            msg = f"✅ У {member.mention} убрано **{take_qty}x {item['item_name']}**"
+            if take_qty < requested_qty:
+                msg += f"\n⚠️ У игрока было только **{available}** шт., поэтому забрано всё доступное."
+            if interaction:
+                await interaction.response.send_message(msg, ephemeral=True)
+            else:
+                await ctx.send(msg)
+        else:
+            err = "❌ Не удалось забрать предмет."
+            if interaction:
+                await interaction.response.send_message(err, ephemeral=True)
+            else:
+                await ctx.send(err)
 
     @commands.command(name='give-item')
     @commands.has_permissions(administrator=True)
@@ -803,77 +899,8 @@ class Admin(commands.Cog, name="👑 Админ"):
         await add_item(member.id, vehicle['name'], quantity)
         await ctx.send(f"✅ {member.mention} получил **{quantity}x {vehicle['name']}**.")
 
-class InvseeChoiceView(View):
-    def __init__(self, admin_id: int, target_id: int, bot):
-        super().__init__(timeout=30)
-        self.admin_id = admin_id
-        self.target_id = target_id
-        self.bot = bot
-
-    @button(label="В ЛС", style=discord.ButtonStyle.primary)
-    async def to_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.admin_id: return
-        user = self.bot.get_user(self.admin_id)
-        if user:
-            try:
-                await user.send(embed=await self._build_inventory_embed())
-                await interaction.response.send_message("Инвентарь отправлен в ЛС.", ephemeral=True)
-            except:
-                await interaction.response.send_message("Не могу отправить ЛС.", ephemeral=True)
-        else:
-            await interaction.response.send_message("Ошибка: пользователь не найден.", ephemeral=True)
-
-    @button(label="Сюда", style=discord.ButtonStyle.secondary)
-    async def here(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.admin_id: return
-        embed = await self._build_inventory_embed()
-        await interaction.response.edit_message(embed=embed, view=None)
-
-    async def _build_inventory_embed(self):
-        items = await get_inventory(self.target_id)
-        embed = discord.Embed(title="📦 Инвентарь", color=discord.Color.blue())
-        if not items:
-            embed.description = "Пусто."
-        else:
-            text = "\n".join(f"**{it['item_name']}** — {it['quantity']} шт." for it in items)
-            if len(text) > 2000:
-                text = text[:1997] + "..."
-            embed.description = text
-        return embed
-
-class ConfirmView(View):
-    def __init__(self, author_id, vehicle_id, name):
-        super().__init__(timeout=30)
-        self.author_id = author_id
-        self.vehicle_id = vehicle_id
-        self.name = name
-    @button(label="Удалить", style=discord.ButtonStyle.danger)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("Вы не можете использовать это.", ephemeral=True)
-            return
-        await Admin().delete_vehicle_by_id(self.vehicle_id, self.name, interaction)
-    @button(label="Отмена", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="Удаление отменено.", view=None)
-
-class DeleteSelectView(View):
-    def __init__(self, author_id, matches, select: Select):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.matches = matches
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
-
-    async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        vehicle = next(v for v in self.matches if v['name'] == selected_name)
-        await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
-
 # ===========================
-# 🛒 COG: МАГАЗИН (обновлён)
+# 🛒 COG: МАГАЗИН
 # ===========================
 class Shop(commands.Cog, name="🛒 Магазин"):
     VEHICLE_CATEGORIES = [
@@ -904,7 +931,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             vehicles = [v for v in all_vehicles if v.get('category') == view.filter_value]
             filter_desc = f"Категория: {view.filter_value}"
         elif view.filter_type == 'search':
-            # Поиск по стране (точное совпадение с полем country)
             vehicles = [v for v in all_vehicles if v.get('country', '').lower() == view.filter_value.lower()]
             filter_desc = f"Поиск по стране: {view.filter_value}"
         else:
@@ -957,7 +983,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             "description": data['description'],
             "price": data['price'],
             "category": data['category'],
-            "country": country,               # привязано к стране подателя
+            "country": country,
             "wiki_link": data['wiki_link'],
             "submitter_id": str(user_id),
             "approved": False,
@@ -1001,8 +1027,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
     async def give_license(self, ctx, target: discord.Member, *, vehicle_identifier: str):
         """Выдать лицензию на технику (название или all)"""
         giver_user = await get_user(ctx.author.id)
-        target_user = await get_user(target.id)
-
         giver_country = giver_user.get('country')
         if not giver_country:
             await ctx.send("❌ У вас не зарегистрирована страна (используйте !reg).")
@@ -1054,7 +1078,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         if quantity <= 0:
             await ctx.send("❌ Количество должно быть больше 0.")
             return
-        # Ищем технику
         vehicle = await vehicles_col.find_one({"approved": True, "name": item_name.strip()})
         if not vehicle:
             regex = re.compile(re.escape(item_name.strip()), re.IGNORECASE)
@@ -1068,7 +1091,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
                 return
             vehicle = matches[0]
 
-        # Проверка лицензии/страны
         buyer_user = await get_user(ctx.author.id)
         buyer_country = buyer_user.get('country')
         vehicle_country = vehicle.get('country')
@@ -1107,6 +1129,54 @@ class Shop(commands.Cog, name="🛒 Магазин"):
                 await ctx.send("📬 Инвентарь отправлен в личные сообщения.", ephemeral=True)
         except:
             await ctx.send("❌ Не могу отправить вам ЛС. Проверьте настройки приватности.", ephemeral=True)
+
+    # ----- Использование предмета -----
+    @commands.command(name='use')
+    @is_registered()
+    async def use_item(self, ctx, quantity: int, *, item_name: str):
+        """Использовать предмет из инвентаря (частичный поиск, авто‑подбор количества)"""
+        if quantity <= 0:
+            await ctx.send("❌ Количество должно быть больше 0.")
+            return
+
+        items = await get_inventory(ctx.author.id)
+        if not items:
+            await ctx.send("❌ Ваш инвентарь пуст.")
+            return
+
+        regex = re.compile(re.escape(item_name.strip()), re.IGNORECASE)
+        matches = [it for it in items if regex.search(it['item_name'])]
+
+        if not matches:
+            await ctx.send("❌ У вас нет предметов с таким названием.")
+            return
+
+        if len(matches) == 1:
+            await self._process_use(ctx.author, matches[0], quantity, interaction=None, ctx=ctx)
+        else:
+            options = [discord.SelectOption(label=it['item_name'][:100]) for it in matches[:25]]
+            select = Select(placeholder="Выберите предмет для использования...", options=options)
+            view = UseSelectView(ctx.author.id, quantity, matches, select, self)
+            await ctx.send("Найдено несколько предметов. Выберите:", view=view)
+
+    async def _process_use(self, user: discord.Member, item: dict, requested_qty: int, interaction=None, ctx=None):
+        available = item['quantity']
+        use_qty = min(requested_qty, available)
+        success = await remove_item(user.id, item['item_name'], use_qty)
+        if success:
+            msg = f"✅ Вы использовали **{item['item_name']}** в количестве **{use_qty}** шт."
+            if use_qty < requested_qty:
+                msg += f"\n⚠️ У вас было только **{available}** шт., поэтому использовано всё доступное."
+            if interaction:
+                await interaction.response.send_message(msg, ephemeral=True)
+            else:
+                await ctx.send(msg)
+        else:
+            err = "❌ Не удалось использовать предмет."
+            if interaction:
+                await interaction.response.send_message(err, ephemeral=True)
+            else:
+                await ctx.send(err)
 
 # ========== UI ДЛЯ МАГАЗИНА ==========
 class ShopView(View):
@@ -1314,6 +1384,169 @@ class RejectionModal(Modal, title="Причина отклонения"):
         embed.set_footer(text=f"Отклонено модератором: {self.moderator}")
         await self.message.edit(embed=embed, view=None)
         await interaction.response.send_message("❌ Заявка отклонена.", ephemeral=True, delete_after=3)
+
+# ========== ДОПОЛНИТЕЛЬНЫЕ VIEW-КЛАССЫ ==========
+class InvseeChoiceView(View):
+    def __init__(self, admin_id: int, target_id: int, bot):
+        super().__init__(timeout=30)
+        self.admin_id = admin_id
+        self.target_id = target_id
+        self.bot = bot
+
+    @button(label="В ЛС", style=discord.ButtonStyle.primary)
+    async def to_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.admin_id: return
+        user = self.bot.get_user(self.admin_id)
+        if user:
+            try:
+                await user.send(embed=await self._build_inventory_embed())
+                await interaction.response.send_message("Инвентарь отправлен в ЛС.", ephemeral=True)
+            except:
+                await interaction.response.send_message("Не могу отправить ЛС.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Ошибка: пользователь не найден.", ephemeral=True)
+
+    @button(label="Сюда", style=discord.ButtonStyle.secondary)
+    async def here(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.admin_id: return
+        embed = await self._build_inventory_embed()
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    async def _build_inventory_embed(self):
+        items = await get_inventory(self.target_id)
+        embed = discord.Embed(title="📦 Инвентарь", color=discord.Color.blue())
+        if not items:
+            embed.description = "Пусто."
+        else:
+            text = "\n".join(f"**{it['item_name']}** — {it['quantity']} шт." for it in items)
+            if len(text) > 2000:
+                text = text[:1997] + "..."
+            embed.description = text
+        return embed
+
+class ConfirmView(View):
+    def __init__(self, author_id, vehicle_id, name):
+        super().__init__(timeout=30)
+        self.author_id = author_id
+        self.vehicle_id = vehicle_id
+        self.name = name
+    @button(label="Удалить", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Вы не можете использовать это.", ephemeral=True)
+            return
+        await Admin().delete_vehicle_by_id(self.vehicle_id, self.name, interaction)
+    @button(label="Отмена", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Удаление отменено.", view=None)
+
+class DeleteSelectView(View):
+    def __init__(self, author_id, matches, select: Select):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.matches = matches
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.author_id
+
+    async def select_callback(self, interaction: discord.Interaction):
+        selected_name = interaction.data['values'][0]
+        vehicle = next(v for v in self.matches if v['name'] == selected_name)
+        await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
+
+class TakeSelectView(View):
+    def __init__(self, author_id: int, member: discord.Member, quantity: int, matches: list, select: Select, admin_cog):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.member = member
+        self.quantity = quantity
+        self.matches = matches
+        self.admin_cog = admin_cog
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.author_id
+
+    async def select_callback(self, interaction: discord.Interaction):
+        selected_name = interaction.data['values'][0]
+        item = next((it for it in self.matches if it['item_name'] == selected_name), None)
+        if item:
+            await self.admin_cog._process_take_removal(None, self.member, item, self.quantity, interaction)
+        self.stop()
+
+class UseSelectView(View):
+    def __init__(self, author_id: int, quantity: int, matches: list, select: Select, shop_cog):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.quantity = quantity
+        self.matches = matches
+        self.shop_cog = shop_cog
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.author_id
+
+    async def select_callback(self, interaction: discord.Interaction):
+        selected_name = interaction.data['values'][0]
+        item = next((it for it in self.matches if it['item_name'] == selected_name), None)
+        if item:
+            await self.shop_cog._process_use(interaction.user, item, self.quantity, interaction)
+        self.stop()
+
+class PlayersCountryView(View):
+    def __init__(self, guild: discord.Guild):
+        super().__init__(timeout=180)
+        self.guild = guild
+        self.mode = 'states'
+        self.message = None
+
+    async def build_embed(self, mode: str) -> discord.Embed:
+        reg_role = self.guild.get_role(REGISTERED_ROLE_ID)
+        country_role = self.guild.get_role(COUNTRY_ROLE_ID)
+
+        if not reg_role:
+            return discord.Embed(title="Ошибка", description="Роль зарегистрированного не найдена.")
+
+        members = [m for m in self.guild.members if reg_role in m.roles and not m.bot]
+
+        if mode == 'states':
+            state_members = []
+            for m in members:
+                if country_role and country_role in m.roles:
+                    user = await get_user(m.id)
+                    country = user.get('country')
+                    if country:
+                        state_members.append((country, m))
+            state_members.sort(key=lambda x: x[0].lower())
+            description = ""
+            for i, (country, member) in enumerate(state_members, 1):
+                description += f"**{i}.** {country} ({member.name})\n"
+            if not description:
+                description = "Нет государств."
+            embed = discord.Embed(title="🌍 Государства", description=description, color=discord.Color.blue())
+        else:
+            other_members = [m for m in members if not country_role or country_role not in m.roles]
+            other_members.sort(key=lambda m: m.name.lower())
+            description = ""
+            for i, member in enumerate(other_members, 1):
+                description += f"**{i}.** {member.name}\n"
+            if not description:
+                description = "Нет игроков без государства."
+            embed = discord.Embed(title="👥 Другие", description=description, color=discord.Color.greyple())
+        return embed
+
+    @button(label="Государства", style=discord.ButtonStyle.primary)
+    async def states_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.mode = 'states'
+        embed = await self.build_embed('states')
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @button(label="Другие", style=discord.ButtonStyle.secondary)
+    async def others_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.mode = 'others'
+        embed = await self.build_embed('others')
+        await interaction.response.edit_message(embed=embed, view=self)
 
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
