@@ -20,10 +20,7 @@ economy_col = db['economy']
 reform_links_col = db['reform_links']
 vehicles_col = db['vehicles']
 licenses_col = db['licenses']
-<<<<<<< HEAD
 inventory_col = db['inventory']          # новая коллекция для инвентаря
-=======
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 
 # ID роли зарегистрированного игрока
 REGISTERED_ROLE_ID = 1501510805169115176
@@ -36,17 +33,10 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД =====
 DEFAULT_BUDGETS = {
-<<<<<<< HEAD
     'budget_social': 10,      # социальные расходы
     'budget_education': 6,    # образование
     'budget_healthcare': 8,   # здравоохранение
     'budget_other': 1,        # иные расходы (неизменяемые)
-=======
-    'budget_social': 10,
-    'budget_education': 6,
-    'budget_healthcare': 8,
-    'budget_other': 1,
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 }
 
 async def get_user(user_id: int) -> dict:
@@ -142,7 +132,6 @@ async def update_unhappiness(user_id: int, user: dict = None) -> float:
     user['last_unhappiness_update'] = current_time
     return new_unhappiness
 
-<<<<<<< HEAD
 # ===== ИНВЕНТАРЬ =====
 async def add_item(user_id: int, item_name: str, quantity: int):
     await inventory_col.update_one(
@@ -166,8 +155,6 @@ async def get_inventory(user_id: int) -> list:
     cursor = inventory_col.find({'user_id': str(user_id)}).sort('item_name', 1)
     return await cursor.to_list(length=None)
 
-=======
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 # ===== СОБЫТИЯ =====
 @bot.event
 async def on_ready():
@@ -258,11 +245,7 @@ class General(commands.Cog, name="⚙️ Основные"):
     async def info(self, ctx):
         """Информация о боте"""
         embed = discord.Embed(title="LinkoBot", description="Бот для сервера Военная-политическая-игра", color=discord.Color.blue())
-<<<<<<< HEAD
         embed.add_field(name="Версия", value="2.4.0", inline=False)
-=======
-        embed.add_field(name="Версия", value="2.3.2", inline=False)
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
         await ctx.send(embed=embed)
 
 # ===========================
@@ -758,7 +741,6 @@ class Admin(commands.Cog, name="👑 Админ"):
         if interaction:
             await interaction.response.send_message(f"✅ Техника **{name}** удалена из магазина.", ephemeral=True)
 
-<<<<<<< HEAD
     # ----- Инвентарь админские команды -----
     @commands.command(name='invsee')
     @commands.has_permissions(administrator=True)
@@ -840,8 +822,6 @@ class InvseeChoiceView(View):
             embed.description = text
         return embed
 
-=======
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 class ConfirmView(View):
     def __init__(self, author_id, vehicle_id, name):
         super().__init__(timeout=30)
@@ -874,11 +854,7 @@ class DeleteSelectView(View):
         await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
 
 # ===========================
-<<<<<<< HEAD
 # 🛒 COG: МАГАЗИН (обновлён)
-=======
-# 🛒 COG: МАГАЗИН
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 # ===========================
 class Shop(commands.Cog, name="🛒 Магазин"):
     VEHICLE_CATEGORIES = [
@@ -909,14 +885,9 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             vehicles = [v for v in all_vehicles if v.get('category') == view.filter_value]
             filter_desc = f"Категория: {view.filter_value}"
         elif view.filter_type == 'search':
-<<<<<<< HEAD
             # Поиск по стране (точное совпадение с полем country)
             vehicles = [v for v in all_vehicles if v.get('country', '').lower() == view.filter_value.lower()]
             filter_desc = f"Поиск по стране: {view.filter_value}"
-=======
-            vehicles = [v for v in all_vehicles if v.get('country_flag') == view.filter_value]
-            filter_desc = f"Поиск по флагу: {view.filter_value}"
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
         else:
             vehicles = all_vehicles
             filter_desc = "Вся техника"
@@ -938,13 +909,8 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             embed.add_field(name="Нет техники", value="Здесь пока пусто", inline=False)
         else:
             for v in page_vehicles:
-<<<<<<< HEAD
                 country = v.get('country', '?')
                 name = f"**{country}**: **{v['name']}** — {v['price']:,} 💵"
-=======
-                country_flag = v.get('country_flag', '')
-                name = f"{country_flag} **{v['name']}** — {v['price']:,} 💵"
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
                 desc = v['description'][:80] + ('...' if len(v['description']) > 80 else '')
                 wiki = v.get('wiki_link', '')
                 if wiki:
@@ -956,33 +922,23 @@ class Shop(commands.Cog, name="🛒 Магазин"):
     @is_registered()
     async def add_vehicle(self, ctx):
         """Добавить заявку на новую технику в магазин"""
-<<<<<<< HEAD
         user = await get_user(ctx.author.id)
         if not user.get('country'):
             await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
             return
-=======
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
         start_view = StartAddView(self, ctx.author.id)
         await ctx.send("Нажмите кнопку, чтобы начать заполнение заявки на технику.", view=start_view)
 
     async def submit_application(self, user_id: int, data: dict):
         now = datetime.now().timestamp()
-<<<<<<< HEAD
         user = await get_user(user_id)
         country = user.get('country', '?')
-=======
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
         vehicle = {
             "name": data['name'],
             "description": data['description'],
             "price": data['price'],
             "category": data['category'],
-<<<<<<< HEAD
             "country": country,               # привязано к стране подателя
-=======
-            "country_flag": data['flag'],
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
             "wiki_link": data['wiki_link'],
             "submitter_id": str(user_id),
             "approved": False,
@@ -998,11 +954,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             embed.add_field(name="Описание", value=data['description'], inline=False)
             embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
             embed.add_field(name="Категория", value=data['category'], inline=True)
-<<<<<<< HEAD
             embed.add_field(name="Страна", value=country, inline=True)
-=======
-            embed.add_field(name="Флаг", value=data['flag'], inline=True)
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
             embed.add_field(name="Википедия", value=data['wiki_link'] if data['wiki_link'] else "Не указана", inline=False)
             embed.set_footer(text=f"Отправитель: {self.bot.get_user(user_id)}")
             view = ApprovalView(self, vehicle['_id'])
@@ -1075,7 +1027,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         )
         await ctx.send(f"✅ {target.mention} получил лицензию на **{vehicle['name']}**.")
 
-<<<<<<< HEAD
     # ----- Покупка -----
     @commands.command(name='buy')
     @is_registered()
@@ -1139,10 +1090,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             await ctx.send("❌ Не могу отправить вам ЛС. Проверьте настройки приватности.", ephemeral=True)
 
 # ========== UI ДЛЯ МАГАЗИНА ==========
-=======
-# ========== UI ДЛЯ МАГАЗИНА ==========
-
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 class ShopView(View):
     def __init__(self, cog: Shop, author_id: int):
         super().__init__(timeout=180)
@@ -1181,29 +1128,17 @@ class SearchButton(discord.ui.Button):
     def __init__(self, label, style):
         super().__init__(label=label, style=style)
     async def callback(self, interaction: discord.Interaction):
-<<<<<<< HEAD
         modal = CountrySearchModal(self.view)
         await interaction.response.send_modal(modal)
 
 class CountrySearchModal(Modal, title="Поиск по стране"):
     country = TextInput(label="Введите название страны", placeholder="Франция", max_length=50)
-=======
-        modal = FlagSearchModal(self.view)
-        await interaction.response.send_modal(modal)
-
-class FlagSearchModal(Modal, title="Поиск по флагу страны"):
-    flag = TextInput(label="Введите флаг (например 🇩🇪)", placeholder="🇩🇪", max_length=10)
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
     def __init__(self, shop_view: ShopView):
         super().__init__()
         self.shop_view = shop_view
     async def on_submit(self, interaction: discord.Interaction):
         self.shop_view.filter_type = 'search'
-<<<<<<< HEAD
         self.shop_view.filter_value = self.country.value.strip()
-=======
-        self.shop_view.filter_value = self.flag.value.strip()
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
         self.shop_view.current_page = 0
         await self.shop_view.update_message(interaction)
 
@@ -1216,11 +1151,7 @@ class PageButton(discord.ui.Button):
         if self.view.filter_type == 'category':
             vehicles = [v for v in all_vehicles if v.get('category') == self.view.filter_value]
         elif self.view.filter_type == 'search':
-<<<<<<< HEAD
             vehicles = [v for v in all_vehicles if v.get('country', '').lower() == (self.view.filter_value or '').lower()]
-=======
-            vehicles = [v for v in all_vehicles if v.get('country_flag') == self.view.filter_value]
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
         else:
             vehicles = all_vehicles
         total = len(vehicles)
@@ -1232,10 +1163,6 @@ class PageButton(discord.ui.Button):
         await self.view.update_message(interaction)
 
 # ========== UI ДЛЯ ДОБАВЛЕНИЯ ТЕХНИКИ ==========
-<<<<<<< HEAD
-=======
-
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 class StartAddView(View):
     def __init__(self, cog: Shop, user_id: int):
         super().__init__(timeout=120)
@@ -1249,12 +1176,7 @@ class VehicleInfoModal(Modal, title="Заполните данные техни�
     name = TextInput(label="Название", placeholder="Т-90", max_length=80)
     description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Основной боевой танк...", max_length=500)
     price = TextInput(label="Стоимость", placeholder="5000000", max_length=20)
-<<<<<<< HEAD
     wiki_link = TextInput(label="Ссылка на википедию (обязательно)", placeholder="https://ru.wikipedia.org/wiki/Т-90", max_length=200, required=True)
-=======
-    flag = TextInput(label="Флаг страны (эмодзи)", placeholder="🇷🇺", max_length=10)
-    wiki_link = TextInput(label="Ссылка на википедию", placeholder="https://ru.wikipedia.org/wiki/Т-90", max_length=200, required=False)
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 
     def __init__(self, cog: Shop, user_id: int):
         super().__init__()
@@ -1273,10 +1195,6 @@ class VehicleInfoModal(Modal, title="Заполните данные техни�
             'name': self.name.value.strip(),
             'description': self.description.value.strip(),
             'price': price_int,
-<<<<<<< HEAD
-=======
-            'flag': self.flag.value.strip(),
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
             'wiki_link': self.wiki_link.value.strip(),
         }
         view = CategorySelectView(self.cog, self.user_id)
@@ -1298,24 +1216,16 @@ class CategorySelectView(View):
             await interaction.response.send_message("⚠️ Данные утеряны, начните заново.", ephemeral=True)
             return
         data['category'] = category
-<<<<<<< HEAD
         user = await get_user(self.user_id)
         country = user.get('country', '?')
-=======
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 
         embed = discord.Embed(title="Подтверждение заявки", color=discord.Color.green())
         embed.add_field(name="Название", value=data['name'], inline=False)
         embed.add_field(name="Описание", value=data['description'], inline=False)
         embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
         embed.add_field(name="Категория", value=category, inline=True)
-<<<<<<< HEAD
         embed.add_field(name="Страна", value=country, inline=True)
         embed.add_field(name="Википедия", value=data['wiki_link'], inline=False)
-=======
-        embed.add_field(name="Флаг", value=data['flag'], inline=True)
-        embed.add_field(name="Википедия", value=data['wiki_link'] if data['wiki_link'] else "Не указана", inline=False)
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 
         submit_view = SubmitView(self.cog, self.user_id)
         await interaction.response.send_message(embed=embed, view=submit_view, ephemeral=True)
@@ -1339,10 +1249,6 @@ class SubmitView(View):
         await interaction.response.send_message("❌ Заявка отменена.", ephemeral=True)
 
 # ========== UI ДЛЯ МОДЕРАЦИИ ==========
-<<<<<<< HEAD
-=======
-
->>>>>>> 884b4e89b6e66ed2b45b22f39ab7f98dcd661903
 class ApprovalView(View):
     def __init__(self, shop_cog: Shop, vehicle_id):
         super().__init__(timeout=None)
