@@ -23,7 +23,6 @@ inventory_col = db['inventory']
 daily_submissions_col = db['daily_submissions']
 mobilization_links_col = db['mobilization_links']
 daily_mobilization_col = db['daily_mobilization']
-<<<<<<< HEAD
 buffs_col = db['buffs']
 =======
 >>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
