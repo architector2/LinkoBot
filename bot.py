@@ -23,9 +23,7 @@ inventory_col = db['inventory']
 daily_submissions_col = db['daily_submissions']
 mobilization_links_col = db['mobilization_links']
 daily_mobilization_col = db['daily_mobilization']
-buffs_col = db['buffs']
-=======
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
+collect_effects_col = db['collect_effects']
 
 # ID ролей
 REGISTERED_ROLE_ID = 1501510805169115176
@@ -196,6 +194,19 @@ async def update_unhappiness(user_id: int, user: dict = None) -> float:
     user['last_unhappiness_update'] = current_time
     return new_unhappiness
 
+
+
+async def get_collect_effects(user_id: int) -> list:
+    cursor = collect_effects_col.find({'user_id': str(user_id)}).sort('created_at', 1)
+    return await cursor.to_list(length=None)
+
+
+async def get_collect_modifier(user_id: int) -> tuple[int, list]:
+    effects = await get_collect_effects(user_id)
+    buff_total = sum(int(effect.get('percent', 0)) for effect in effects if effect.get('type') == 'buff')
+    debuff_total = sum(int(effect.get('percent', 0)) for effect in effects if effect.get('type') == 'debuff')
+    return buff_total - debuff_total, effects
+
 # ===== ИНВЕНТАРЬ =====
 async def add_item(user_id: int, item_name: str, quantity: int):
     await inventory_col.update_one(
@@ -277,12 +288,6 @@ USAGE_HINTS = {
     'mobilization': '❌ Команда `!mobilization` не требует аргументов. Открывает панель мобилизации.',
     'remove-sol': '❌ Использование: `!remove-sol @игрок <число>`\nПример: `!remove-sol @Undervud 5000`',
     'add-sol': '❌ Использование: `!add-sol @игрок <число>`\nПример: `!add-sol @Undervud 10000`',
-<<<<<<< HEAD
-    'priziv-redakt': '❌ Использование: `!priziv-redakt @игрок <число>`\nПример: `!priziv-redakt @Undervud 10` (устанавливает % мобилизации, макс 25)',
-    'abb-baff': '❌ Использование: `!abb-baff @игрок`',
-    'modernization': '❌ Команда `!modernization` не требует аргументов.\nПросто напиши `!modernization` и следуй инструкциям.',
-=======
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 }
 
 @bot.event
@@ -349,11 +354,7 @@ class General(commands.Cog, name="⚙️ Основные"):
     async def info(self, ctx):
         """Информация о боте"""
         embed = discord.Embed(title="LinkoBot", description="Бот для сервера Военная-политическая-игра", color=discord.Color.blue())
-<<<<<<< HEAD
-        embed.add_field(name="Версия", value="2.9.5", inline=False)
-=======
         embed.add_field(name="Версия", value="2.8.0", inline=False)
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
         await ctx.send(embed=embed)
 
     @commands.command(name='players-country')
@@ -374,11 +375,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='collect', aliases=['coll'])
     @is_registered()
     async def collect(self, ctx):
-<<<<<<< HEAD
-        """Собрать доход и прирост населения (с учётом баффов/дебаффов, содержания)"""
-=======
         """Собрать доход и прирост населения (с учётом содержания)"""
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
         user = await get_user(ctx.author.id)
         if user['gdp'] == 0:
             await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
@@ -397,15 +394,6 @@ class Economy(commands.Cog, name="💰 Экономика"):
         income_per_hour = user['gdp'] / 48
         gross_income = int(income_per_hour * hours_passed)
 
-<<<<<<< HEAD
-        # Баффы/дебаффы
-        active_buffs = await buffs_col.find({'user_id': str(ctx.author.id), 'active': True}).to_list(length=None)
-        net_buff = sum(b['percent'] for b in active_buffs)
-        if net_buff != 0:
-            gross_income = int(gross_income * (1 + net_buff / 100))
-
-=======
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
         # Бюджетные вычеты
         budget_social = user.get('budget_social', DEFAULT_BUDGETS['budget_social'])
         budget_education = user.get('budget_education', DEFAULT_BUDGETS['budget_education'])
@@ -440,6 +428,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         soldier_cost = int(total_soldier_maintenance * hours_passed)
 
         net_income = gross_income - total_budget_deduct - vehicle_cost - soldier_cost
+        net_income = int(net_income * (100 + collect_bonus) / 100)
         new_balance = user['balance'] + net_income
 
         # Прирост населения
@@ -479,8 +468,6 @@ class Economy(commands.Cog, name="💰 Экономика"):
         )
         embed.add_field(name="ВВП", value=f"{user['gdp']:,} 💵", inline=True)
         embed.add_field(name="Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
-        if net_buff != 0:
-            embed.add_field(name="Баффы/Дебаффы", value=f"{net_buff:+.1f}%", inline=True)
         embed.add_field(name="Валовый доход", value=f"{gross_income:,} 💵", inline=False)
 
         embed.add_field(
@@ -508,7 +495,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 inline=False
             )
 
-        embed.add_field(name="📌 Чистая прибыль", value=f"+{net_income:,} 💵", inline=False)
+        embed.add_field(name="🎯 Бафф/дебафф к коллекту", value=f"{collect_bonus:+d}%", inline=False)
+        embed.add_field(name="📌 Чистая прибыль", value=f"{net_income:+,} 💵", inline=False)
         embed.add_field(name="💰 Новый баланс", value=f"{new_balance:,} 💵", inline=False)
 
         if population > 0:
@@ -548,6 +536,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
             return
 
         user = await get_user(ctx.author.id)
+        collect_bonus, _ = await get_collect_modifier(ctx.author.id)
         if user['gdp'] == 0:
             await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
             return
@@ -639,7 +628,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='cab')
     @is_registered()
     async def cab(self, ctx, member: discord.Member = None):
-        """Статистика игрока — ВВП, баланс, население, недовольство, баффы"""
+        """Статистика игрока — ВВП, баланс, население, недовольство"""
         if member is None:
             member = ctx.author
 
@@ -654,6 +643,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
             hours_since = (current_time - last_collect) / 3600
             hours_since = min(hours_since, 12)
             pending = int(income_per_hour * hours_since)
+            pending = int(pending * (100 + collect_bonus) / 100)
         else:
             pending = 0
 
@@ -674,6 +664,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         embed.add_field(name="📈 ВВП", value=f"{user['gdp']:,} 💵", inline=True)
         embed.add_field(name="⏱️ Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
         embed.add_field(name="📦 Ожидает коллекта", value=f"{pending:,} 💵", inline=True)
+        embed.add_field(name="🎯 Бафф/дебафф к коллекту", value=f"{collect_bonus:+d}%", inline=True)
 
         population = user.get('population', 0)
         if population > 0:
@@ -689,12 +680,6 @@ class Economy(commands.Cog, name="💰 Экономика"):
         speed_str = f"{unhappiness_speed:+.2f}%/ч" if unhappiness_speed else "0%/ч"
         unhappiness_block = f"😡 **{unhappiness:.2f}%**\n({speed_str})"
         embed.add_field(name="🗳️ Недовольство", value=unhappiness_block, inline=False)
-
-        # Баффы/дебаффы
-        active_buffs = await buffs_col.find({'user_id': str(member.id), 'active': True}).to_list(length=None)
-        if active_buffs:
-            buff_str = "\n".join(f"{'+' if b['percent']>0 else ''}{b['percent']}% – {b['reason']}" for b in active_buffs)
-            embed.add_field(name="⚡Баффы/Дебаффы", value=buff_str, inline=False)
 
         await ctx.send(embed=embed)
 
@@ -818,6 +803,17 @@ class Admin(commands.Cog, name="👑 Админ"):
         embed.add_field(name="Прирост в час", value=f"{hourly:.4f}% (1 игровой год = 48 ч)", inline=False)
         await ctx.send(embed=embed)
 
+    @commands.command(name='priziv-redakt')
+    @commands.has_permissions(administrator=True)
+    async def priziv_redakt(self, ctx, member: discord.Member, percent: float):
+        """Установить процент мобилизации игрока (2.5-25%)"""
+        if percent < 2.5 or percent > 25:
+            await ctx.send("❌ Процент мобилизации должен быть от **2.5** до **25**!")
+            return
+        await update_user(member.id, {'mobilization_percent': percent})
+        embed = discord.Embed(title="📯 Лимит мобилизации обновлён", description=f"{member.mention} — новый лимит мобилизации: **{percent:.1f}%**", color=discord.Color.orange())
+        await ctx.send(embed=embed)
+
     @commands.command(name='nasel-redakt')
     @commands.has_permissions(administrator=True)
     async def nasel_redakt(self, ctx, member: discord.Member, amount: int):
@@ -891,6 +887,7 @@ class Admin(commands.Cog, name="👑 Админ"):
             'unhappiness': 0.0,
             'last_unhappiness_update': 0,
             'country': None,
+            'mobilization_percent': 2.5,
         }
         await update_user(member.id, default_user)
         await inventory_col.delete_many({'user_id': str(member.id)})
@@ -1047,26 +1044,140 @@ class Admin(commands.Cog, name="👑 Админ"):
             return
         await add_item(member.id, "Обученный Солдат", quantity)
         await ctx.send(f"✅ {member.mention} получил **{quantity}** обученных солдат.")
-<<<<<<< HEAD
 
-    @commands.command(name='priziv-redakt')
-    @commands.has_permissions(administrator=True)
-    async def priziv_redakt(self, ctx, member: discord.Member, percent: float):
-        """Изменить максимальный процент мобилизации (до 25%)"""
-        if percent < 0 or percent > 25:
-            await ctx.send("❌ Процент мобилизации должен быть от 0 до 25.")
-            return
-        await update_user(member.id, {'mobilization_percent': percent})
-        await ctx.send(f"✅ Процент мобилизации для {member.mention} установлен на **{percent:.1f}%**.")
 
     @commands.command(name='abb-baff')
     @commands.has_permissions(administrator=True)
     async def abb_baff(self, ctx, member: discord.Member):
-        """Управление баффами/дебаффами игрока"""
-        view = BuffManagerView(member, self.bot)
-        await ctx.send(f"Управление баффами/дебаффами для {member.mention}", view=view)
-=======
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
+        """Открыть панель баффов и дебаффов для колекта"""
+        modifier, effects = await get_collect_modifier(member.id)
+        buff_count = sum(1 for effect in effects if effect.get('type') == 'buff')
+        debuff_count = sum(1 for effect in effects if effect.get('type') == 'debuff')
+        embed = discord.Embed(
+            title=f"🎛️ Баффы / дебаффы: {member.display_name}",
+            color=discord.Color.purple()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="Текущий модификатор", value=f"{modifier:+d}%", inline=False)
+        embed.add_field(name="Баффы", value=str(buff_count), inline=True)
+        embed.add_field(name="Дебаффы", value=str(debuff_count), inline=True)
+        embed.set_footer(text="Используйте кнопки снизу")
+        view = CollectEffectsAdminView(self, member.id)
+        await ctx.send(embed=embed, view=view)
+
+
+class CollectEffectModal(Modal):
+    amount = TextInput(label="Процент", placeholder="1-100", max_length=3)
+    reason = TextInput(label="Причина", style=discord.TextStyle.long, placeholder="Укажите причину...", max_length=500)
+
+    def __init__(self, admin_cog: Admin, target_id: int, effect_type: str):
+        title = "Дать бафф" if effect_type == 'buff' else "Дать дебафф"
+        super().__init__(title=title)
+        self.admin_cog = admin_cog
+        self.target_id = target_id
+        self.effect_type = effect_type
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            percent = int(self.amount.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Процент должен быть числом.", ephemeral=True)
+            return
+        if percent < 1 or percent > 100:
+            await interaction.response.send_message("❌ Процент должен быть от 1 до 100.", ephemeral=True)
+            return
+        reason = self.reason.value.strip()
+        if not reason:
+            await interaction.response.send_message("❌ Причина не может быть пустой.", ephemeral=True)
+            return
+        await collect_effects_col.insert_one({
+            'user_id': str(self.target_id),
+            'type': self.effect_type,
+            'percent': percent,
+            'reason': reason,
+            'created_by': str(interaction.user.id),
+            'created_at': datetime.now().timestamp(),
+        })
+        await interaction.response.send_message(
+            f"✅ {'Бафф' if self.effect_type == 'buff' else 'Дебафф'} **{percent}%** добавлен.", 
+            ephemeral=True
+        )
+
+
+class CollectEffectDeleteButton(discord.ui.Button):
+    def __init__(self, effect: dict, target_id: int):
+        label = "Убрать Бафф" if effect.get('type') == 'buff' else "Убрать Дебафф"
+        super().__init__(label=label, style=discord.ButtonStyle.danger)
+        self.effect_id = effect['_id']
+        self.target_id = target_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Только администратор может это использовать.", ephemeral=True)
+            return
+        await collect_effects_col.delete_one({'_id': self.effect_id})
+        effects = await get_collect_effects(self.target_id)
+        if not effects:
+            embed = discord.Embed(title="📋 Баффы / дебаффы", description="Список пуст.", color=discord.Color.dark_purple())
+            await interaction.response.edit_message(embed=embed, view=None)
+            return
+        view = CollectEffectsListView(target_id=self.target_id, effects=effects)
+        embed = await view.build_embed()
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class CollectEffectsListView(View):
+    def __init__(self, target_id: int, effects: list):
+        super().__init__(timeout=180)
+        self.target_id = target_id
+        self.effects = effects
+        for effect in effects[:25]:
+            self.add_item(CollectEffectDeleteButton(effect, target_id))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.guild_permissions.administrator
+
+    async def build_embed(self) -> discord.Embed:
+        modifier, effects = await get_collect_modifier(self.target_id)
+        embed = discord.Embed(title="📋 Баффы / дебаффы", color=discord.Color.dark_purple())
+        if not effects:
+            embed.description = "Список пуст."
+            return embed
+        lines = []
+        for i, effect in enumerate(effects, 1):
+            sign = "+" if effect.get('type') == 'buff' else "-"
+            reason = effect.get('reason', 'Без причины')
+            lines.append(f"**{i}.** {'Бафф' if effect.get('type') == 'buff' else 'Дебафф'} {sign}{effect.get('percent', 0)}% — {reason}")
+        embed.description = "\n".join(lines[:25])
+        embed.add_field(name="Текущий модификатор", value=f"{modifier:+d}%", inline=False)
+        if len(lines) > 25:
+            embed.set_footer(text="Показаны первые 25 записей.")
+        return embed
+
+
+class CollectEffectsAdminView(View):
+    def __init__(self, admin_cog: Admin, target_id: int):
+        super().__init__(timeout=180)
+        self.admin_cog = admin_cog
+        self.target_id = target_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.guild_permissions.administrator
+
+    @button(label="Дать бафф", style=discord.ButtonStyle.success)
+    async def give_buff(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(CollectEffectModal(self.admin_cog, self.target_id, 'buff'))
+
+    @button(label="Список Баффов/дебаффов", style=discord.ButtonStyle.secondary)
+    async def show_list(self, interaction: discord.Interaction, button: discord.ui.Button):
+        effects = await get_collect_effects(self.target_id)
+        view = CollectEffectsListView(self.target_id, effects)
+        embed = await view.build_embed()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @button(label="Дать дебафф", style=discord.ButtonStyle.danger)
+    async def give_debuff(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(CollectEffectModal(self.admin_cog, self.target_id, 'debuff'))
 
 # ===========================
 # 🛒 COG: МАГАЗИН
@@ -1085,6 +1196,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
     def __init__(self, bot):
         self.bot = bot
         self.pending_add = {}
+        self.pending_modernization = {}
 
     @commands.command(name='shop')
     @is_registered()
@@ -1095,7 +1207,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         view.message = await ctx.send(embed=embed, view=view)
 
     async def build_shop_embed(self, view: "ShopView") -> discord.Embed:
-        all_vehicles = await vehicles_col.find({"approved": True, "modernization": {"$ne": True}}).to_list(length=None)
+        all_vehicles = await vehicles_col.find({"approved": True}).to_list(length=None)
         if view.filter_type == 'category':
             vehicles = [v for v in all_vehicles if v.get('category') == view.filter_value]
             filter_desc = f"Категория: {view.filter_value}"
@@ -1136,23 +1248,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         if not user.get('country'):
             await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
             return
-<<<<<<< HEAD
-=======
-
-        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
-        if not can_submit:
-            await ctx.send(msg)
-            return
-
-        info = await get_daily_submission_info(ctx.author.id)
-        view = StartAddView(self, ctx.author.id, info)
-        await ctx.send(
-            f"Нажмите на кнопку чтобы зарегистрировать технику\n"
-            f"Лимит заявок за день {info}\n"
-            f"КД после отправки 1 час",
-            view=view
-        )
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 
         can_submit, msg = await check_daily_submission_limit(ctx.author.id)
         if not can_submit:
@@ -1168,7 +1263,33 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             view=view
         )
 
-    async def submit_application(self, user_id: int, data: dict, modernization: bool = False):
+
+    @commands.command(name='modernization')
+    @is_registered()
+    async def modernization(self, ctx):
+        """Открыть заявку на модернизацию техники"""
+        user = await get_user(ctx.author.id)
+        if not user.get('country'):
+            await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
+            return
+
+        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
+        if not can_submit:
+            await ctx.send(msg)
+            return
+
+        info = await get_daily_submission_info(ctx.author.id)
+        view = ModernizationStartView(self, ctx.author.id, info)
+        embed = discord.Embed(
+            title="🛠️ Модернизация техники",
+            description="Чтобы модернизировать технику нажмите на кнопку снизу.",
+            color=discord.Color.dark_teal()
+        )
+        embed.add_field(name="Лимит заявок за день", value=info, inline=True)
+        embed.add_field(name="КД после отправки", value="1 час", inline=True)
+        await ctx.send(embed=embed, view=view)
+
+    async def submit_application(self, user_id: int, data: dict):
         now = datetime.now().timestamp()
         user = await get_user(user_id)
         country = user.get('country', '?')
@@ -1178,46 +1299,27 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             "price": data['price'],
             "category": data['category'],
             "country": country,
-<<<<<<< HEAD
-            "wiki_link": data.get('wiki_link', ''),
-=======
-            "wiki_link": data['wiki_link'],
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
+            "wiki_link": data.get('wiki_link'),
             "image_url": None,
             "submitter_id": str(user_id),
             "approved": False,
-            "modernization": modernization,
             "created_at": now,
         }
         result = await vehicles_col.insert_one(vehicle)
         vehicle['_id'] = result.inserted_id
 
-<<<<<<< HEAD
-        if not modernization:
-            can_submit, _ = await check_daily_submission_limit(user_id)
-            if can_submit:
-                await record_submission(user_id)
-=======
         await record_submission(user_id)
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 
         channel = self.bot.get_channel(self.APPROVAL_CHANNEL)
         if channel:
-            title = "📥 Новая заявка на модернизацию" if modernization else "📥 Новая заявка на технику"
-            embed = discord.Embed(title=title, color=discord.Color.orange())
+            title_text = "📥 Новая модернизация техники" if data.get('application_type') == 'modernization' else "📥 Новая заявка на технику"
+            embed = discord.Embed(title=title_text, color=discord.Color.orange())
             embed.add_field(name="Название", value=data['name'], inline=False)
             embed.add_field(name="Описание", value=data['description'], inline=False)
             embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
             embed.add_field(name="Категория", value=data['category'], inline=True)
             embed.add_field(name="Страна", value=country, inline=True)
-<<<<<<< HEAD
-            if not modernization:
-                embed.add_field(name="Википедия", value=data.get('wiki_link', 'Не указана'), inline=False)
-            else:
-                embed.add_field(name="Википедия", value="Не требуется", inline=False)
-=======
             embed.add_field(name="Википедия", value=data['wiki_link'] if data['wiki_link'] else "Не указана", inline=False)
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
             embed.set_footer(text=f"Отправитель: {self.bot.get_user(user_id)}")
             view = ApprovalView(self, vehicle['_id'])
             await channel.send(embed=embed, view=view)
@@ -1462,12 +1564,8 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         if population == 0:
             await ctx.send("❌ У вас нет населения.")
             return
-<<<<<<< HEAD
-        mob_pct = user.get('mobilization_percent', 2.5)
-        max_mobilizable = int(population * mob_pct / 100)
-=======
-        max_mobilizable = int(population * 0.025)
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
+        mobilization_percent = user.get('mobilization_percent', 2.5)
+        max_mobilizable = int(population * mobilization_percent / 100)
         if max_mobilizable <= 0:
             await ctx.send("❌ Недостаточно населения для мобилизации (нужен хотя бы 1 человек).")
             return
@@ -1475,20 +1573,20 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         today = datetime.now().strftime('%Y-%m-%d')
         daily_doc = await daily_mobilization_col.find_one({'user_id': str(ctx.author.id), 'date_str': today})
         already_mobilized = daily_doc['total'] if daily_doc else 0
-        remaining_daily = max(0, 350_000 - already_mobilized)
+        remaining_daily = max(0, min(350_000 - already_mobilized, max_mobilizable - already_mobilized))
         if remaining_daily == 0:
-            await ctx.send("❌ Дневной лимит мобилизации (350,000) уже исчерпан.")
+            if already_mobilized >= max_mobilizable:
+                await ctx.send("❌ Лимит мобилизации по населению уже исчерпан.")
+            else:
+                await ctx.send("❌ Дневной лимит мобилизации (350,000) уже исчерпан.")
             return
 
         embed = discord.Embed(
             title="📯 Мобилизация",
             description=f"Текущее население: **{population:,}**\n"
-<<<<<<< HEAD
-                        f"Можно мобилизовать до **{max_mobilizable:,}** ({mob_pct}%)\n"
-=======
-                        f"Можно мобилизовать до **{max_mobilizable:,}** (2.5%)\n"
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
-                        f"Дневной лимит: уже мобилизовано **{already_mobilized:,}** / 350,000",
+                        f"Можно мобилизовать до **{max_mobilizable:,}** ({mobilization_percent:.1f}%)\n"
+                        f"Уже мобилизовано сегодня: **{already_mobilized:,}**\n"
+                        f"Осталось доступно: **{remaining_daily:,}**",
             color=discord.Color.orange()
         )
         view = MobilizationView(ctx.author.id, max_mobilizable, remaining_daily, self)
@@ -1509,14 +1607,10 @@ class Shop(commands.Cog, name="🛒 Магазин"):
 
         user = await get_user(user_id)
         population = user.get('population', 0)
-<<<<<<< HEAD
-        mob_pct = user.get('mobilization_percent', 2.5)
-        max_mobilizable = int(population * mob_pct / 100)
-=======
-        max_mobilizable = int(population * 0.025)
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
-        if quantity > max_mobilizable:
-            return f"❌ Нельзя мобилизовать больше **{max_mobilizable:,}**."
+        mobilization_percent = user.get('mobilization_percent', 2.5)
+        max_mobilizable = int(population * mobilization_percent / 100)
+        if already + quantity > max_mobilizable:
+            return f"❌ Нельзя мобилизовать больше **{max(0, max_mobilizable - already):,}** (осталось по лимиту {mobilization_percent:.1f}%)."
         if quantity <= 0:
             return "❌ Количество должно быть положительным."
 
@@ -1544,35 +1638,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
 
         return f"✅ Мобилизовано **{quantity:,}** солдат. Население: {new_population:,}."
 
-<<<<<<< HEAD
-    # ===== МОДЕРНИЗАЦИЯ =====
-    @commands.command(name='modernization')
-    @is_registered()
-    async def modernization(self, ctx):
-        """Модернизировать технику (отправляет заявку)"""
-        user = await get_user(ctx.author.id)
-        if not user.get('country'):
-            await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
-            return
-
-        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
-        if not can_submit:
-            await ctx.send(msg)
-            return
-
-        info = await get_daily_submission_info(ctx.author.id)
-        view = ModernizationStartView(self, ctx.author.id, info)
-        await ctx.send(
-            f"Чтобы модернизировать технику нажмите на кнопку снизу.\n"
-            f"Лимит заявок за день {info}\n"
-            f"КД после отправки 1 час",
-            view=view
-        )
-
-# ========== UI КЛАССЫ ==========
-=======
 # ========== UI ДЛЯ МАГАЗИНА ==========
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class ShopView(View):
     def __init__(self, cog: Shop, author_id: int):
         super().__init__(timeout=180)
@@ -1645,10 +1711,7 @@ class PageButton(discord.ui.Button):
             self.view.current_page = new_page
         await self.view.update_message(interaction)
 
-<<<<<<< HEAD
-=======
 # ========== UI ДЛЯ ДОБАВЛЕНИЯ ТЕХНИКИ ==========
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class StartAddView(View):
     def __init__(self, cog: Shop, user_id: int, limit_info: str):
         super().__init__(timeout=120)
@@ -1710,7 +1773,7 @@ class CategorySelectView(View):
         embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
         embed.add_field(name="Категория", value=category, inline=True)
         embed.add_field(name="Страна", value=country, inline=True)
-        embed.add_field(name="Википедия", value=data['wiki_link'], inline=False)
+        embed.add_field(name="Википедия", value=data.get('wiki_link') or "Не указана", inline=False)
         submit_view = SubmitView(self.cog, self.user_id)
         await interaction.response.send_message(embed=embed, view=submit_view, ephemeral=True)
 
@@ -1732,10 +1795,96 @@ class SubmitView(View):
         self.cog.pending_add.pop(self.user_id, None)
         await interaction.response.send_message("❌ Заявка отменена.", ephemeral=True)
 
-<<<<<<< HEAD
-=======
+class ModernizationStartView(View):
+    def __init__(self, cog: Shop, user_id: int, limit_info: str):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.user_id = user_id
+        self.limit_info = limit_info
+
+    @button(label="Модернизировать технику", style=discord.ButtonStyle.primary)
+    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ModernizationModal(self.cog, self.user_id))
+
+
+class ModernizationModal(Modal, title="Заполните данные модернизации"):
+    name = TextInput(label="Название", placeholder="Т-90", max_length=80)
+    description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Улучшение брони, оптики...", max_length=1000)
+    price = TextInput(label="Стоимость", placeholder="5000000", max_length=20)
+
+    def __init__(self, cog: Shop, user_id: int):
+        super().__init__()
+        self.cog = cog
+        self.user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            price_int = int(self.price.value.replace(',', '').replace(' ', ''))
+            if price_int <= 0:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ Стоимость должна быть положительным целым числом.", ephemeral=True)
+            return
+        self.cog.pending_modernization[self.user_id] = {
+            'name': self.name.value.strip(),
+            'description': self.description.value.strip(),
+            'price': price_int,
+            'wiki_link': None,
+            'application_type': 'modernization',
+        }
+        view = ModernizationCategorySelectView(self.cog, self.user_id)
+        await interaction.response.send_message("Выберите категорию техники:", view=view, ephemeral=True)
+
+
+class ModernizationCategorySelectView(View):
+    def __init__(self, cog: Shop, user_id: int):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.user_id = user_id
+        select = Select(placeholder="Выберите категорию...", options=[discord.SelectOption(label=cat) for cat in Shop.VEHICLE_CATEGORIES])
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        category = interaction.data['values'][0]
+        data = self.cog.pending_modernization.get(self.user_id)
+        if not data:
+            await interaction.response.send_message("⚠️ Данные утеряны, начните заново.", ephemeral=True)
+            return
+        data['category'] = category
+        user = await get_user(self.user_id)
+        country = user.get('country', '?')
+        embed = discord.Embed(title="Подтверждение модернизации", color=discord.Color.green())
+        embed.add_field(name="Название", value=data['name'], inline=False)
+        embed.add_field(name="Описание", value=data['description'], inline=False)
+        embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
+        embed.add_field(name="Категория", value=category, inline=True)
+        embed.add_field(name="Страна", value=country, inline=True)
+        submit_view = ModernizationSubmitView(self.cog, self.user_id)
+        await interaction.response.send_message(embed=embed, view=submit_view, ephemeral=True)
+
+
+class ModernizationSubmitView(View):
+    def __init__(self, cog: Shop, user_id: int):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.user_id = user_id
+
+    @button(label="Модернизировать технику", style=discord.ButtonStyle.success)
+    async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        data = self.cog.pending_modernization.pop(self.user_id, None)
+        if not data:
+            await interaction.response.send_message("Данные не найдены.", ephemeral=True)
+            return
+        await self.cog.submit_application(self.user_id, data)
+        await interaction.response.send_message("✅ Модернизация отправлена на рассмотрение!", ephemeral=True, delete_after=5)
+
+    @button(label="Отменить", style=discord.ButtonStyle.danger)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.cog.pending_modernization.pop(self.user_id, None)
+        await interaction.response.send_message("❌ Модернизация отменена.", ephemeral=True)
+
 # ========== UI ДЛЯ МОДЕРАЦИИ ==========
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class ApprovalView(View):
     def __init__(self, shop_cog: Shop, vehicle_id):
         super().__init__(timeout=None)
@@ -1781,10 +1930,7 @@ class RejectionModal(Modal, title="Причина отклонения"):
         await self.message.edit(embed=embed, view=None)
         await interaction.response.send_message("❌ Заявка отклонена.", ephemeral=True, delete_after=3)
 
-<<<<<<< HEAD
-=======
 # ========== ДОПОЛНИТЕЛЬНЫЕ VIEW ==========
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class VehicleInfoSelectView(View):
     def __init__(self, author_id, matches, select: Select, shop_cog):
         super().__init__(timeout=60)
@@ -2053,10 +2199,7 @@ class TopSelectView(View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.ctx.author.id
 
-<<<<<<< HEAD
-=======
 # ========== UI ДЛЯ МОБИЛИЗАЦИИ ==========
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class MobilizationView(View):
     def __init__(self, user_id: int, max_mobilizable: int, remaining_daily: int, cog: Shop):
         super().__init__(timeout=120)
@@ -2092,176 +2235,6 @@ class MobilizationModal(Modal, title="Мобилизация населения"
         result = await self.cog.perform_mobilization(interaction, interaction.user.id, qty, self.link.value.strip())
         await interaction.response.send_message(result, ephemeral=True)
 
-<<<<<<< HEAD
-class BuffManagerView(View):
-    def __init__(self, member: discord.Member, bot):
-        super().__init__(timeout=120)
-        self.member = member
-        self.bot = bot
-
-    @button(label="Дать бафф", style=discord.ButtonStyle.success)
-    async def give_buff(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BuffModal(self.member.id, positive=True)
-        await interaction.response.send_modal(modal)
-
-    @button(label="Дать дебафф", style=discord.ButtonStyle.danger)
-    async def give_debuff(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = BuffModal(self.member.id, positive=False)
-        await interaction.response.send_modal(modal)
-
-    @button(label="Список Баффов/Дебаффов", style=discord.ButtonStyle.secondary)
-    async def list_buffs(self, interaction: discord.Interaction, button: discord.ui.Button):
-        active = await buffs_col.find({'user_id': str(self.member.id), 'active': True}).to_list(length=10)
-        if not active:
-            await interaction.response.send_message("Нет активных баффов/дебаффов.", ephemeral=True)
-            return
-        embed = discord.Embed(title="Баффы/Дебаффы", description="", color=discord.Color.blue())
-        for b in active:
-            embed.add_field(name=f"{'+' if b['percent']>0 else ''}{b['percent']}% – {b['reason']}",
-                            value="\u200b", inline=False)
-        view = BuffListView(active, self.member)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-class BuffModal(Modal, title="Добавить бафф/дебафф"):
-    def __init__(self, user_id: int, positive: bool):
-        super().__init__()
-        self.user_id = user_id
-        self.positive = positive
-        self.percent_input = TextInput(label="Процент (1-100)", placeholder="Число", max_length=3)
-        self.reason_input = TextInput(label="Причина", style=discord.TextStyle.long, max_length=100)
-        self.add_item(self.percent_input)
-        self.add_item(self.reason_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            percent = int(self.percent_input.value)
-        except ValueError:
-            await interaction.response.send_message("Введите число.", ephemeral=True)
-            return
-        if percent < 1 or percent > 100:
-            await interaction.response.send_message("Процент должен быть от 1 до 100.", ephemeral=True)
-            return
-        if not self.positive:
-            percent = -percent
-        reason = self.reason_input.value.strip()
-        if not reason:
-            await interaction.response.send_message("Укажите причину.", ephemeral=True)
-            return
-        await buffs_col.insert_one({
-            'user_id': str(self.user_id),
-            'percent': percent,
-            'reason': reason,
-            'active': True,
-            'added_by': str(interaction.user.id),
-            'timestamp': datetime.now().timestamp()
-        })
-        await interaction.response.send_message(f"{'Бафф' if self.positive else 'Дебафф'} на {percent}% добавлен по причине: {reason}", ephemeral=True)
-
-class BuffListView(View):
-    def __init__(self, buffs, member: discord.Member):
-        super().__init__(timeout=60)
-        self.buffs = buffs
-        self.member = member
-        for b in buffs:
-            self.add_item(BuffRemoveButton(b, member))
-
-class BuffRemoveButton(button.Button):
-    def __init__(self, buff, member):
-        super().__init__(style=discord.ButtonStyle.danger, label=f"Убрать {buff['percent']}%")
-        self.buff = buff
-        self.member = member
-
-    async def callback(self, interaction: discord.Interaction):
-        await buffs_col.update_one({'_id': self.buff['_id']}, {'$set': {'active': False}})
-        await interaction.response.send_message(f"Бафф/дебафф удалён.", ephemeral=True)
-
-class ModernizationStartView(View):
-    def __init__(self, cog: Shop, user_id: int, limit_info: str):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.user_id = user_id
-        self.limit_info = limit_info
-
-    @button(label="Модернизировать технику", style=discord.ButtonStyle.primary)
-    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = ModernizationInfoModal(self.cog, self.user_id)
-        await interaction.response.send_modal(modal)
-
-class ModernizationInfoModal(Modal, title="Заполните данные техники"):
-    name = TextInput(label="Название", placeholder="Т-90М", max_length=80)
-    description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Модернизация...", max_length=1000)
-    price = TextInput(label="Стоимость", placeholder="7500000", max_length=20)
-
-    def __init__(self, cog: Shop, user_id: int):
-        super().__init__()
-        self.cog = cog
-        self.user_id = user_id
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            price_int = int(self.price.value.replace(',', '').replace(' ', ''))
-            if price_int <= 0: raise ValueError
-        except ValueError:
-            await interaction.response.send_message("❌ Стоимость должна быть положительным целым числом.", ephemeral=True)
-            return
-        self.cog.pending_add[self.user_id] = {
-            'name': self.name.value.strip(),
-            'description': self.description.value.strip(),
-            'price': price_int,
-            'category': self.cog.VEHICLE_CATEGORIES[0],  # временно, потом выбор
-        }
-        view = CategorySelectModernizationView(self.cog, self.user_id)
-        await interaction.response.send_message("Выберите категорию техники:", view=view, ephemeral=True)
-
-class CategorySelectModernizationView(View):
-    def __init__(self, cog: Shop, user_id: int):
-        super().__init__(timeout=60)
-        self.cog = cog
-        self.user_id = user_id
-        select = Select(placeholder="Выберите категорию...", options=[discord.SelectOption(label=cat) for cat in Shop.VEHICLE_CATEGORIES])
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def select_callback(self, interaction: discord.Interaction):
-        category = interaction.data['values'][0]
-        data = self.cog.pending_add.get(self.user_id)
-        if not data:
-            await interaction.response.send_message("⚠️ Данные утеряны.", ephemeral=True)
-            return
-        data['category'] = category
-        user = await get_user(self.user_id)
-        country = user.get('country', '?')
-        embed = discord.Embed(title="Подтверждение заявки (Модернизация)", color=discord.Color.green())
-        embed.add_field(name="Название", value=data['name'], inline=False)
-        embed.add_field(name="Описание", value=data['description'], inline=False)
-        embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
-        embed.add_field(name="Категория", value=category, inline=True)
-        embed.add_field(name="Страна", value=country, inline=True)
-        submit_view = SubmitModernizationView(self.cog, self.user_id)
-        await interaction.response.send_message(embed=embed, view=submit_view, ephemeral=True)
-
-class SubmitModernizationView(View):
-    def __init__(self, cog: Shop, user_id: int):
-        super().__init__(timeout=60)
-        self.cog = cog
-        self.user_id = user_id
-
-    @button(label="Отправить заявку", style=discord.ButtonStyle.success)
-    async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data = self.cog.pending_add.pop(self.user_id, None)
-        if not data:
-            await interaction.response.send_message("Данные не найдены.", ephemeral=True)
-            return
-        await self.cog.submit_application(self.user_id, data, modernization=True)
-        await interaction.response.send_message("✅ Заявка отправлена на рассмотрение!", ephemeral=True, delete_after=5)
-
-    @button(label="Отменить", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.cog.pending_add.pop(self.user_id, None)
-        await interaction.response.send_message("❌ Заявка отменена.", ephemeral=True)
-
-=======
->>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
 async def setup_hook():
