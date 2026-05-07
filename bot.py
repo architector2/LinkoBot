@@ -1,7 +1,3 @@
-in this code fix Нажмите кнопку для создания альянса:
-This interaction failed when typing !ally-create
-
-
 import discord
 from discord.ext import commands
 from discord.ui import Select, View, Modal, TextInput, button
