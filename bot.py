@@ -1605,7 +1605,6 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
     @is_registered()
     async def ally_create(self, ctx):
         """Создать альянс"""
-        # Проверяем, не создал ли уже 2 альянса
         count = await count_user_alliances_as_owner(ctx.author.id)
         if count >= 2:
             await ctx.send("❌ Вы уже создали максимальное количество альянсов (2).")
@@ -1630,7 +1629,6 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
             await ctx.send("❌ Альянс не найден.")
             return
 
-        # Проверяем, владелец ли это
         is_owner = str(ctx.author.id) == alliance['owner_id']
         view = AllyInfoView(self, alliance, ctx.author.id, is_owner, self.bot)
         embed = await self.build_alliance_embed(alliance, self.bot)
@@ -1657,13 +1655,11 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
             await ctx.send("❌ Только владелец альянса может приглашать новых членов.")
             return
 
-        # Проверяем, не является ли цель уже членом
         target_user = await get_user(target.id)
         if target_user.get('alliance_id') == alliance_id:
             await ctx.send("❌ Этот игрок уже является членом вашего альянса.")
             return
 
-        # Создаем приглашение
         invite_id = await alliance_invites_col.insert_one({
             'alliance_id': alliance_id,
             'alliance_name': alliance['name'],
@@ -1712,10 +1708,8 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
             await ctx.send("❌ Этот игрок не является членом вашего альянса.")
             return
 
-        # Выгоняем из альянса
         await update_user(target.id, {'alliance_id': None, 'alliance_role': None})
 
-        # Удаляем из ветки (если она существует)
         if alliance.get('thread_id'):
             try:
                 thread = self.bot.get_channel(alliance['thread_id'])
@@ -1737,7 +1731,6 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
             return
 
         if count == 1:
-            # Ищем альянс владельца
             alliance = await alliances_col.find_one({'owner_id': str(ctx.author.id)})
             if alliance:
                 view = AllyRemoveConfirmView(self, alliance['_id'])
@@ -1748,7 +1741,6 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
                 )
                 await ctx.send(embed=embed, view=view)
         else:
-            # Показываем список альянсов
             alliances = await alliances_col.find({'owner_id': str(ctx.author.id)}).to_list(length=None)
             view = AllyRemoveSelectView(ctx.author.id, alliances, self)
             await ctx.send("Выберите альянс для удаления:", view=view)
@@ -1782,7 +1774,6 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
             await ctx.send("❌ Только владелец альянса может изменять изображение.")
             return
 
-        # Обновляем изображение
         await alliances_col.update_one({'_id': alliance_id}, {'$set': {'image_url': image_url}})
         await ctx.send(f"✅ Изображение альянса **{alliance['name']}** обновлено.")
 
@@ -1797,7 +1788,6 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
         embed.add_field(name="💰 Казна", value=f"{alliance.get('treasury', 0):,} 💵", inline=True)
         embed.add_field(name="📊 Налог", value=f"{alliance.get('tax_percent', 2)}%", inline=True)
 
-        # Члены
         members = alliance.get('members', [])
         owner_id = alliance.get('owner_id')
 
@@ -1830,17 +1820,14 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
         if not alliance:
             return False
 
-        # Удаляем налог у всех членов
         members = alliance.get('members', [])
         for member_id in members:
             await update_user(int(member_id), {'alliance_id': None, 'alliance_role': None})
 
-        # Удаляем владельца
         owner_id = int(alliance.get('owner_id', 0))
         if owner_id:
             await update_user(owner_id, {'alliance_id': None, 'alliance_role': None})
 
-        # Удаляем ветку
         if alliance.get('thread_id'):
             try:
                 thread = self.bot.get_channel(alliance['thread_id'])
@@ -1849,7 +1836,6 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
             except:
                 pass
 
-        # Удаляем альянс из БД
         await alliances_col.delete_one({'_id': alliance_id})
         return True
 
@@ -2508,27 +2494,28 @@ class AllyCreateStartView(View):
     async def create_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(AllyCreateModal(self.cog, self.user_id))
 
-class AllyCreateModal(Modal):
+# ========== ИСПРАВЛЕННЫЙ КЛАСС ==========
+class AllyCreateModal(Modal, title="Создание альянса"):
+    name = TextInput(label="Название альянса", placeholder="Великий Союз", max_length=80)
+    description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Могучий альянс...", max_length=500)
+    ally_type = TextInput(label="Тип (Военный/Экономический/Военно-Экономический)", placeholder="Военный", max_length=30)
+
     def __init__(self, cog: "Alliances", user_id: int):
-        super().__init__(title="Создание альянса")
+        super().__init__()
         self.cog = cog
         self.user_id = user_id
 
-    name = TextInput(label="Название альянса", placeholder="Великий Союз", max_length=80)
-    description = TextInput(label="Описание", style=discord.TextStyle.long,
-                            placeholder="Могучий альянс...", max_length=500)
-    ally_type = TextInput(label="Тип (Военный/Экономический/Военно-Экономический)",
-                          placeholder="Военный", max_length=30)
-
     async def on_submit(self, interaction: discord.Interaction):
-        # 1. Мгновенно откладываем ответ — Discord больше не покажет "This interaction failed"
+        # ✅ ИСПРАВЛЕНИЕ: сразу defer, чтобы не истёк 3-секундный таймаут Discord
+        # пока выполняются медленные операции с БД и созданием ветки
         await interaction.response.defer(ephemeral=True)
 
         name = self.name.value.strip()
         desc = self.description.value.strip()
         atype = self.ally_type.value.strip()
 
-        # 2. Создаём запись в БД
+        guild = interaction.guild
+
         alliance_data = {
             'owner_id': str(self.user_id),
             'name': name,
@@ -2542,51 +2529,51 @@ class AllyCreateModal(Modal):
             'created_at': datetime.now().timestamp()
         }
 
-        try:
-            result = await alliances_col.insert_one(alliance_data)
-            alliance_data['_id'] = result.inserted_id
+        result = await alliances_col.insert_one(alliance_data)
+        alliance_data['_id'] = result.inserted_id
 
-            # 3. Привязываем владельца немедленно
-            await update_user(self.user_id,
-                              {'alliance_id': result.inserted_id, 'alliance_role': 'owner'})
+        channel = guild.get_channel(ALLIANCES_CHANNEL_ID)
+        if channel:
+            try:
+                thread = await channel.create_thread(
+                    name=f"🏛️ {name}",
+                    type=discord.ChannelType.public_thread,
+                    auto_archive_duration=1440,
+                    reason=f"Альянс {name}"
+                )
 
-            # 4. Пытаемся создать ветку (если не получится — альянс всё равно сохранён)
-            thread_msg = ""
-            channel = interaction.guild.get_channel(ALLIANCES_CHANNEL_ID)
-            if channel:
-                try:
-                    thread = await channel.create_thread(
-                        name=f"🏛️ {name}",
-                        auto_archive_duration=1440,
-                        reason=f"Альянс {name}"
-                    )
-                    # сохраняем ID ветки в БД
-                    await alliances_col.update_one(
-                        {'_id': result.inserted_id},
-                        {'$set': {'thread_id': thread.id}}
-                    )
-                    creator = interaction.guild.get_member(self.user_id)
-                    if creator:
-                        await thread.add_user(creator)
-                    thread_msg = f"Ветка создана: {thread.mention}"
-                except Exception as e:
-                    thread_msg = f"⚠️ Не удалось создать ветку: {e}"
-            else:
-                thread_msg = "⚠️ Канал альянсов не найден. Альянс сохранён, но без ветки."
+                creator = guild.get_member(self.user_id)
+                if creator:
+                    await thread.add_user(creator)
 
-            # 5. Финальный ответ
-            embed = discord.Embed(
-                title=f"✅ Альянс «{name}» создан!",
-                description=thread_msg or "Альянс готов.",
-                color=discord.Color.green()
-            )
-            await interaction.edit_original_response(embed=embed)
+                await alliances_col.update_one(
+                    {'_id': result.inserted_id},
+                    {'$set': {'thread_id': thread.id}}
+                )
+                await update_user(self.user_id, {
+                    'alliance_id': result.inserted_id,
+                    'alliance_role': 'owner'
+                })
 
-        except Exception as e:
-            # Если что-то упало на уровне БД — сообщаем
-            await interaction.edit_original_response(
-                content=f"❌ Ошибка при создании альянса: {e}"
-            )
+                embed = discord.Embed(
+                    title=f"✅ Альянс {name} создан!",
+                    description=f"Ветка: {thread.mention}",
+                    color=discord.Color.green()
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
+
+            except Exception as e:
+                # Откатываем запись в БД если не удалось создать ветку
+                await alliances_col.delete_one({'_id': result.inserted_id})
+                await interaction.followup.send(
+                    f"❌ Ошибка при создании ветки: {str(e)}",
+                    ephemeral=True
+                )
+        else:
+            # Откатываем запись в БД если канал не найден
+            await alliances_col.delete_one({'_id': result.inserted_id})
+            await interaction.followup.send("❌ Канал альянсов не найден.", ephemeral=True)
+
 
 class AllyInfoView(View):
     def __init__(self, cog: "Alliances", alliance: dict, user_id: int, is_owner: bool, bot):
@@ -2653,7 +2640,6 @@ class AllyKickSelectView(View):
                 await alliances_col.update_one({'_id': self.alliance_id}, {'$set': {'members': members}})
                 await update_user(int(member_id), {'alliance_id': None, 'alliance_role': None})
 
-                # Удаляем из ветки
                 if alliance.get('thread_id'):
                     try:
                         thread = self.bot.get_channel(alliance['thread_id'])
@@ -2697,7 +2683,6 @@ class AllyFundModal(Modal, title="Пополнить казну"):
             await interaction.response.send_message(f"❌ Недостаточно денег. Баланс: {user['balance']:,} 💵", ephemeral=True)
             return
 
-        # Пополняем казну
         await alliances_col.update_one({'_id': self.alliance_id}, {'$inc': {'treasury': amount}})
         await update_user(self.user_id, {'balance': user['balance'] - amount})
 
@@ -2762,7 +2747,6 @@ class AllyWithdrawModal(Modal, title="Снять деньги с казны"):
             await interaction.response.send_message(f"❌ В казне недостаточно денег. Доступно: {alliance['treasury']:,} 💵", ephemeral=True)
             return
 
-        # Снимаем с казны
         await alliances_col.update_one({'_id': self.alliance_id}, {'$inc': {'treasury': -amount}})
         user = await get_user(self.user_id)
         await update_user(self.user_id, {'balance': user['balance'] + amount})
@@ -2783,7 +2767,6 @@ class AllyRenameModal(Modal, title="Переименовать альянс"):
 
         await alliances_col.update_one({'_id': self.alliance_id}, {'$set': {'name': new_name}})
 
-        # Обновляем ветку
         if alliance.get('thread_id'):
             try:
                 thread = interaction.client.get_channel(alliance['thread_id'])
@@ -2818,13 +2801,11 @@ class AllyInviteView(View):
             await interaction.response.send_message("❌ Альянс не найден.", ephemeral=True)
             return
 
-        # Добавляем в альянс
         members = alliance.get('members', [])
         members.append(str(self.user_id))
         await alliances_col.update_one({'_id': self.alliance_id}, {'$set': {'members': members}})
         await update_user(self.user_id, {'alliance_id': self.alliance_id, 'alliance_role': 'member'})
 
-        # Добавляем в ветку
         if alliance.get('thread_id'):
             try:
                 thread = interaction.client.get_channel(alliance['thread_id'])
@@ -2917,4 +2898,4 @@ async def setup_hook():
     await bot.add_cog(Alliances(bot))
 
 if __name__ == '__main__':
-    bot.run(TOKEN)
+    bot.run(TOKEN)  
