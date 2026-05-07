@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord.ui import Select, View, Modal, TextInput, button
 import os
 import re
+import asyncio
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import motor.motor_asyncio
@@ -23,12 +24,14 @@ inventory_col = db['inventory']
 daily_submissions_col = db['daily_submissions']
 mobilization_links_col = db['mobilization_links']
 daily_mobilization_col = db['daily_mobilization']
-buffs_col = db['buffs']  # Коллекция баффов/дебаффов
+buffs_col = db['buffs']
+alliances_col = db['alliances']  # Альянсы
 
-# ID ролей
+# ID ролей и каналов
 REGISTERED_ROLE_ID = 1501510805169115176
 UNREGISTERED_ROLE_ID = 1141339127367880764
 COUNTRY_ROLE_ID = 1141340397558321313
+ALLIANCE_CHANNEL_ID = 1501932162381906020  # Канал для веток альянсов
 
 # ===== НАСТРОЙКИ БОТА =====
 intents = discord.Intents.default()
@@ -281,6 +284,13 @@ USAGE_HINTS = {
     'priziv-redakt': '❌ Использование: `!priziv-redakt @игрок <число от 2.5 до 25>`',
     'abb-baff': '❌ Использование: `!abb-baff @игрок`',
     'modernization': '❌ Команда `!modernization` не требует аргументов.',
+    'ally-create': '❌ Команда `!ally-create` не требует аргументов. Откроет анкету создания альянса.',
+    'ally': '❌ Команда `!ally` не требует аргументов. Показывает панель управления вашим альянсом.',
+    'ally-invite': '❌ Использование: `!ally-invite @игрок`',
+    'ally-delete': '❌ (Админ) `!ally-delete`',
+    'ally-remove': '❌ (Владелец) `!ally-remove`',
+    'ally-kick': '❌ Использование: `!ally-kick @игрок`',
+    'iso-ally': '❌ Использование: `!iso-ally <название альянса> <ссылка>`',
 }
 
 @bot.event
@@ -347,7 +357,7 @@ class General(commands.Cog, name="⚙️ Основные"):
     async def info(self, ctx):
         """Информация о боте"""
         embed = discord.Embed(title="LinkoBot", description="Бот для сервера Военная-политическая-игра", color=discord.Color.blue())
-        embed.add_field(name="Версия", value="2.8.0", inline=False)
+        embed.add_field(name="Версия", value="2.9.0", inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(name='players-country')
@@ -368,7 +378,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='collect', aliases=['coll'])
     @is_registered()
     async def collect(self, ctx):
-        """Собрать доход и прирост населения (с учётом содержания и баффов/дебаффов)"""
+        """Собрать доход и прирост населения (с учётом содержания и баффов/дебаффов и налогов альянса)"""
         user = await get_user(ctx.author.id)
         if user['gdp'] == 0:
             await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
@@ -393,7 +403,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         for b in buffs:
             if b['type'] == 'buff':
                 total_buff_percent += b['percent']
-            else:  # debuff
+            else:
                 total_buff_percent -= b['percent']
         if total_buff_percent != 0:
             gross_income = int(gross_income * (1 + total_buff_percent / 100))
@@ -432,7 +442,24 @@ class Economy(commands.Cog, name="💰 Экономика"):
         soldier_cost = int(total_soldier_maintenance * hours_passed)
 
         net_income = gross_income - total_budget_deduct - vehicle_cost - soldier_cost
+
+        # Налоги альянсов
+        alliances = await get_user_alliances(ctx.author.id)
+        alliance_taxes = {}
+        total_tax = 0
+        for alliance in alliances:
+            tax_rate = alliance.get('tax_rate', 2)
+            tax_amount = int(net_income * tax_rate / 100)
+            if tax_amount > 0:
+                alliance_taxes[alliance['_id']] = (alliance['name'], tax_amount)
+                total_tax += tax_amount
+        net_income -= total_tax
+
         new_balance = user['balance'] + net_income
+
+        # Обновление казны альянсов
+        for aid, (aname, tax) in alliance_taxes.items():
+            await alliances_col.update_one({'_id': aid}, {'$inc': {'treasury': tax}})
 
         # Прирост населения
         population = user.get('population', 0)
@@ -500,6 +527,11 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 value=f"Кол-во солдат: {total_soldiers:,}\nРасход: -{soldier_cost:,} 💵",
                 inline=False
             )
+
+        # Отображение налогов альянсов
+        if alliance_taxes:
+            tax_desc = "\n".join(f"**{aname}** ({tax_rate}%): -{tax:,} 💵" for aid, (aname, tax) in alliance_taxes.items())
+            embed.add_field(name="🏛️ Налоги альянсов", value=tax_desc, inline=False)
 
         embed.add_field(name="📌 Чистая прибыль", value=f"+{net_income:,} 💵", inline=False)
         embed.add_field(name="💰 Новый баланс", value=f"{new_balance:,} 💵", inline=False)
@@ -1044,7 +1076,6 @@ class Admin(commands.Cog, name="👑 Админ"):
         await add_item(member.id, "Обученный Солдат", quantity)
         await ctx.send(f"✅ {member.mention} получил **{quantity}** обученных солдат.")
 
-    # ===== НОВЫЕ АДМИН КОМАНДЫ =====
     @commands.command(name='priziv-redakt')
     @commands.has_permissions(administrator=True)
     async def priziv_redakt(self, ctx, member: discord.Member, percent: float):
@@ -1068,1018 +1099,473 @@ class Admin(commands.Cog, name="👑 Админ"):
         view = BuffManageView(member, ctx.author)
         await ctx.send(f"Управление баффами/дебаффами для {member.mention}", view=view)
 
-# ===========================
-# 🛒 COG: МАГАЗИН
-# ===========================
-class Shop(commands.Cog, name="🛒 Магазин"):
-    VEHICLE_CATEGORIES = [
-        "Сухопутная Техника",
-        "ВМФ",
-        "Воздушная Техника",
-        "Ракеты",
-        "ПВО",
-        "Другое",
-    ]
-    APPROVAL_CHANNEL = 1469319991550673061
+    @commands.command(name='ally-delete')
+    @commands.has_permissions(administrator=True)
+    async def ally_delete(self, ctx):
+        """Удалить любой альянс (администратор)"""
+        alliances = await alliances_col.find().to_list(length=100)
+        if not alliances:
+            await ctx.send("Нет альянсов.")
+            return
+        options = [discord.SelectOption(label=a['name'][:100]) for a in alliances]
+        select = Select(placeholder="Выберите альянс для удаления...", options=options)
+        view = AdminAllyDeleteView(ctx.author.id, alliances, select)
+        await ctx.send("Выберите альянс для удаления:", view=view)
 
+# ===========================
+# 🌐 COG: АЛЬЯНСЫ
+# ===========================
+class Alliance(commands.Cog, name="🌐 Альянсы"):
     def __init__(self, bot):
         self.bot = bot
-        self.pending_add = {}
 
-    @commands.command(name='shop')
+    @commands.command(name='ally-create')
     @is_registered()
-    async def shop(self, ctx):
-        """Открыть магазин техники"""
-        view = ShopView(self, ctx.author.id)
-        embed = await self.build_shop_embed(view)
-        view.message = await ctx.send(embed=embed, view=view)
+    async def ally_create(self, ctx):
+        """Создать новый альянс (макс. 2 альянса на игрока)"""
+        owned = await alliances_col.count_documents({'owner_id': str(ctx.author.id)})
+        if owned >= 2:
+            await ctx.send("❌ Вы уже создали 2 альянса. Больше нельзя!")
+            return
+        modal = AllyCreateModal()
+        await ctx.send("Заполните анкету альянса:", view=None, delete_after=1)
+        await ctx.send(embed=discord.Embed(description="Нажмите на кнопку ниже, чтобы ввести данные.", color=discord.Color.blue()),
+                       view=AllyCreateButton(ctx.author.id))
+    # Вспомогательная кнопка для открытия модального окна
+    class AllyCreateButton(View):
+        def __init__(self, user_id):
+            super().__init__(timeout=60)
+            self.user_id = user_id
+        @button(label="Создать альянс", style=discord.ButtonStyle.primary)
+        async def create(self, interaction: discord.Interaction, button: discord.ui.Button):
+            await interaction.response.send_modal(AllyCreateModal())
 
-    async def build_shop_embed(self, view: "ShopView") -> discord.Embed:
-        all_vehicles = await vehicles_col.find({"approved": True}).to_list(length=None)
-        if view.filter_type == 'category':
-            vehicles = [v for v in all_vehicles if v.get('category') == view.filter_value]
-            filter_desc = f"Категория: {view.filter_value}"
-        elif view.filter_type == 'search':
-            vehicles = [v for v in all_vehicles if v.get('country', '').lower() == view.filter_value.lower()]
-            filter_desc = f"Поиск по стране: {view.filter_value}"
+    @commands.command(name='ally')
+    @is_registered()
+    async def ally(self, ctx):
+        """Просмотр и управление вашим альянсом"""
+        alliances = await get_user_alliances(ctx.author.id)
+        if not alliances:
+            await ctx.send("❌ Вы не состоите ни в одном альянсе.")
+            return
+        if len(alliances) == 1:
+            await self.show_alliance_panel(ctx, alliances[0])
         else:
-            vehicles = all_vehicles
-            filter_desc = "Вся техника"
+            # Если в нескольких, даём выбрать
+            options = [discord.SelectOption(label=a['name'][:100]) for a in alliances]
+            select = Select(placeholder="Выберите альянс...", options=options)
+            view = AllySelectView(ctx.author.id, alliances, select, self)
+            await ctx.send("Вы состоите в нескольких альянсах. Выберите один:", view=view)
 
-        total = len(vehicles)
-        per_page = 5
-        max_page = max(0, (total - 1) // per_page)
-        view.current_page = min(view.current_page, max_page)
-        start = view.current_page * per_page
-        end = start + per_page
-        page_vehicles = vehicles[start:end]
-
-        embed = discord.Embed(
-            title="🛒 Магазин техники",
-            description=f"**{filter_desc}**\nСтраница {view.current_page+1}/{max_page+1}",
-            color=discord.Color.dark_teal()
-        )
-        if not page_vehicles:
-            embed.add_field(name="Нет техники", value="Здесь пока пусто", inline=False)
-        else:
-            for v in page_vehicles:
-                name = f"**{v['name']}** — {v['price']:,} 💵"
-                desc = v['description'][:80] + ('...' if len(v['description']) > 80 else '')
-                embed.add_field(name=name, value=desc, inline=False)
-        return embed
-
-    @commands.command(name='add-vehicle', aliases=['add_vehicle'])
-    @is_registered()
-    async def add_vehicle(self, ctx):
-        """Добавить заявку на новую технику в магазин"""
-        user = await get_user(ctx.author.id)
-        if not user.get('country'):
-            await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
-            return
-
-        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
-        if not can_submit:
-            await ctx.send(msg)
-            return
-
-        info = await get_daily_submission_info(ctx.author.id)
-        view = StartAddView(self, ctx.author.id, info)
-        await ctx.send(
-            f"Нажмите на кнопку чтобы зарегистрировать технику\n"
-            f"Лимит заявок за день {info}\n"
-            f"КД после отправки 1 час",
-            view=view
-        )
-
-    @commands.command(name='modernization')
-    @is_registered()
-    async def modernization(self, ctx):
-        """Подать заявку на модернизацию техники (без википедии)"""
-        user = await get_user(ctx.author.id)
-        if not user.get('country'):
-            await ctx.send("❌ У вас не зарегистрирована страна.")
-            return
-        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
-        if not can_submit:
-            await ctx.send(msg)
-            return
-        info = await get_daily_submission_info(ctx.author.id)
-        embed = discord.Embed(
-            title="🔧 Модернизация техники",
-            description="Чтобы модернизировать технику, нажмите на кнопку снизу.",
-            color=discord.Color.purple()
-        )
-        view = ModernizationStartView(self, ctx.author.id, info)
+    async def show_alliance_panel(self, ctx, alliance: dict):
+        embed = await self.build_alliance_embed(alliance, ctx.guild)
+        owner = str(ctx.author.id) == alliance['owner_id']
+        view = AllyManageView(alliance, ctx.author.id, self.bot) if owner else None
         await ctx.send(embed=embed, view=view)
 
-    async def submit_application(self, user_id: int, data: dict):
-        now = datetime.now().timestamp()
-        user = await get_user(user_id)
-        country = user.get('country', '?')
-        vehicle = {
-            "name": data['name'],
-            "description": data['description'],
-            "price": data['price'],
-            "category": data['category'],
-            "country": country,
-            "wiki_link": data.get('wiki_link') if not data.get('is_modernization') else None,
-            "image_url": None,
-            "submitter_id": str(user_id),
-            "approved": False,
-            "created_at": now,
-            "is_modernization": data.get('is_modernization', False),
-        }
-        result = await vehicles_col.insert_one(vehicle)
-        vehicle['_id'] = result.inserted_id
-
-        await record_submission(user_id)
-
-        channel = self.bot.get_channel(self.APPROVAL_CHANNEL)
-        if channel:
-            title = "📥 Новая заявка на технику"
-            if data.get('is_modernization'):
-                title = "📥 Новая заявка на модернизацию"
-            embed = discord.Embed(title=title, color=discord.Color.orange() if not data.get('is_modernization') else discord.Color.purple())
-            embed.add_field(name="Название", value=data['name'], inline=False)
-            embed.add_field(name="Описание", value=data['description'], inline=False)
-            embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
-            embed.add_field(name="Категория", value=data['category'], inline=True)
-            embed.add_field(name="Страна", value=country, inline=True)
-            if data.get('wiki_link'):
-                embed.add_field(name="Википедия", value=data['wiki_link'], inline=False)
-            embed.set_footer(text=f"Отправитель: {self.bot.get_user(user_id)}")
-            view = ApprovalView(self, vehicle['_id'])
-            await channel.send(embed=embed, view=view)
-
-    async def approve_vehicle(self, vehicle_id, moderator: discord.Member):
-        await vehicles_col.update_one({'_id': vehicle_id}, {'$set': {'approved': True, 'approved_by': str(moderator.id)}})
-        vehicle = await vehicles_col.find_one({'_id': vehicle_id})
-        submitter = self.bot.get_user(int(vehicle['submitter_id']))
-        if submitter:
-            try: await submitter.send(f"✅ Ваша заявка на технику **{vehicle['name']}** одобрена!")
-            except: pass
-
-    async def reject_vehicle(self, vehicle_id, reason: str, moderator: discord.Member):
-        await vehicles_col.update_one({'_id': vehicle_id}, {'$set': {'approved': False, 'rejection_reason': reason, 'rejected_by': str(moderator.id)}})
-        vehicle = await vehicles_col.find_one({'_id': vehicle_id})
-        submitter = self.bot.get_user(int(vehicle['submitter_id']))
-        if submitter:
-            try: await submitter.send(f"❌ Ваша заявка на технику **{vehicle['name']}** отклонена.\nПричина: {reason}")
-            except: pass
-
-    @commands.command(name='give-lic')
+    @commands.command(name='ally-invite')
     @is_registered()
-    async def give_license(self, ctx, target: discord.Member, *, vehicle_identifier: str):
-        """Выдать лицензию на технику (название или all)"""
-        giver_user = await get_user(ctx.author.id)
-        giver_country = giver_user.get('country')
-        if not giver_country:
-            await ctx.send("❌ У вас не зарегистрирована страна (используйте !reg).")
+    async def ally_invite(self, ctx, member: discord.Member):
+        """Пригласить игрока в ваш альянс (отправляет ЛС)"""
+        if member.bot:
+            await ctx.send("❌ Ботов нельзя приглашать.")
             return
-        if vehicle_identifier.lower() == 'all':
-            vehicles = await vehicles_col.find({"approved": True, "submitter_id": str(ctx.author.id)}).to_list(length=None)
-            if not vehicles:
-                await ctx.send("У вас нет одобренной техники.")
-                return
-            for v in vehicles:
-                await licenses_col.update_one(
-                    {'user_id': str(target.id), 'vehicle_name': v['name']},
-                    {'$setOnInsert': {'user_id': str(target.id), 'vehicle_name': v['name'], 'issued_by': str(ctx.author.id), 'issued_at': datetime.now().timestamp()}},
-                    upsert=True
-                )
-            await ctx.send(f"✅ {target.mention} получил лицензию на всю вашу технику.")
+        # Найти альянс, которым владеет пользователь
+        alliance = await alliances_col.find_one({'owner_id': str(ctx.author.id)})
+        if not alliance:
+            await ctx.send("❌ У вас нет своего альянса для приглашения.")
             return
-        vehicle = await vehicles_col.find_one({"approved": True, "name": vehicle_identifier.strip(), "submitter_id": str(ctx.author.id)})
-        if not vehicle:
-            regex = re.compile(re.escape(vehicle_identifier.strip()), re.IGNORECASE)
-            candidates = await vehicles_col.find({
-                "approved": True,
-                "submitter_id": str(ctx.author.id),
-                "name": {"$regex": regex}
-            }).to_list(length=None)
-            if not candidates:
-                await ctx.send("Техника с таким названием не найдена среди вашей.")
-                return
-            if len(candidates) > 1:
-                names = [v['name'] for v in candidates]
-                await ctx.send(f"Найдено несколько совпадений: {', '.join(names)}. Уточните название.")
-                return
-            vehicle = candidates[0]
-        await licenses_col.update_one(
-            {'user_id': str(target.id), 'vehicle_name': vehicle['name']},
-            {'$setOnInsert': {'user_id': str(target.id), 'vehicle_name': vehicle['name'], 'issued_by': str(ctx.author.id), 'issued_at': datetime.now().timestamp()}},
-            upsert=True
-        )
-        await ctx.send(f"✅ {target.mention} получил лицензию на **{vehicle['name']}**.")
-
-    @commands.command(name='buy')
-    @is_registered()
-    async def buy(self, ctx, quantity: int, *, item_name: str):
-        """Купить технику из магазина"""
-        if quantity <= 0:
-            await ctx.send("❌ Количество должно быть больше 0.")
+        if str(member.id) in alliance['members']:
+            await ctx.send("❌ Игрок уже в альянсе.")
             return
-        vehicle = await vehicles_col.find_one({"approved": True, "name": item_name.strip()})
-        if not vehicle:
-            regex = re.compile(re.escape(item_name.strip()), re.IGNORECASE)
-            matches = await vehicles_col.find({"approved": True, "name": {"$regex": regex}}).to_list(length=25)
-            if not matches:
-                await ctx.send("❌ Техника не найдена.")
-                return
-            if len(matches) > 1:
-                names = [v['name'] for v in matches]
-                await ctx.send(f"Найдено несколько совпадений: {', '.join(names)}. Уточните название.")
-                return
-            vehicle = matches[0]
-        buyer_user = await get_user(ctx.author.id)
-        buyer_country = buyer_user.get('country')
-        vehicle_country = vehicle.get('country')
-        if buyer_country != vehicle_country:
-            lic = await licenses_col.find_one({'user_id': str(ctx.author.id), 'vehicle_name': vehicle['name']})
-            if not lic:
-                await ctx.send("❌ У вас нет лицензии этой страны. Необходимо получить лицензию или купить у своей страны.")
-                return
-        total_price = vehicle['price'] * quantity
-        if buyer_user['balance'] < total_price:
-            await ctx.send(f"❌ Недостаточно денег. Нужно **{total_price:,}** 💵, у вас **{buyer_user['balance']:,}** 💵.")
-            return
-        await update_user(ctx.author.id, {'balance': buyer_user['balance'] - total_price})
-        await add_item(ctx.author.id, vehicle['name'], quantity)
-        await ctx.send(f"✅ Вы купили **{quantity}x {vehicle['name']}** за **{total_price:,}** 💵. Товар добавлен в инвентарь (`!inv`).")
-
-    @commands.command(name='inv')
-    @is_registered()
-    async def inventory(self, ctx):
-        """Показать ваш инвентарь (только в ЛС)"""
-        items = await get_inventory(ctx.author.id)
-        embed = discord.Embed(title="📦 Ваш инвентарь", color=discord.Color.green())
-        if not items:
-            embed.description = "Пусто."
-        else:
-            text = "\n".join(f"**{it['item_name']}** — {it['quantity']} шт." for it in items)
-            if len(text) > 2000:
-                text = text[:1997] + "..."
-            embed.description = text
-        try:
-            await ctx.author.send(embed=embed)
-            if ctx.guild:
-                await ctx.send("📬 Инвентарь отправлен в личные сообщения.", ephemeral=True)
-        except:
-            await ctx.send("❌ Не могу отправить вам ЛС. Проверьте настройки приватности.", ephemeral=True)
-
-    @commands.command(name='use')
-    @is_registered()
-    async def use_item(self, ctx, quantity: int, *, item_name: str):
-        """Использовать предмет из инвентаря (частичный поиск, авто‑подбор количества)"""
-        if quantity <= 0:
-            await ctx.send("❌ Количество должно быть больше 0.")
-            return
-        items = await get_inventory(ctx.author.id)
-        if not items:
-            await ctx.send("❌ Ваш инвентарь пуст.")
-            return
-        regex = re.compile(re.escape(item_name.strip()), re.IGNORECASE)
-        matches = [it for it in items if regex.search(it['item_name'])]
-        if not matches:
-            await ctx.send("❌ У вас нет предметов с таким названием.")
-            return
-        if len(matches) == 1:
-            await self._process_use(ctx.author, matches[0], quantity, interaction=None, ctx=ctx)
-        else:
-            options = [discord.SelectOption(label=it['item_name'][:100]) for it in matches[:25]]
-            select = Select(placeholder="Выберите предмет для использования...", options=options)
-            view = UseSelectView(ctx.author.id, quantity, matches, select, self)
-            await ctx.send("Найдено несколько предметов. Выберите:", view=view)
-
-    async def _process_use(self, user: discord.Member, item: dict, requested_qty: int, interaction=None, ctx=None):
-        available = item['quantity']
-        use_qty = min(requested_qty, available)
-        success = await remove_item(user.id, item['item_name'], use_qty)
-        if success:
-            msg = f"✅ Вы использовали **{item['item_name']}** в количестве **{use_qty}** шт."
-            if use_qty < requested_qty:
-                msg += f"\n⚠️ У вас было только **{available}** шт., поэтому использовано всё доступное."
-            if interaction:
-                await interaction.response.send_message(msg, ephemeral=True)
-            else:
-                await ctx.send(msg)
-        else:
-            err = "❌ Не удалось использовать предмет."
-            if interaction:
-                await interaction.response.send_message(err, ephemeral=True)
-            else:
-                await ctx.send(err)
-
-    @commands.command(name='vehicle-info')
-    @is_registered()
-    async def vehicle_info(self, ctx, *, name_or_part: str):
-        """Подробная информация о технике (с изображением, если есть)"""
-        vehicle = await vehicles_col.find_one({"approved": True, "name": name_or_part.strip()})
-        if not vehicle:
-            regex = re.compile(re.escape(name_or_part.strip()), re.IGNORECASE)
-            matches = await vehicles_col.find({"approved": True, "name": {"$regex": regex}}).to_list(length=25)
-            if not matches:
-                await ctx.send("❌ Техника не найдена.")
-                return
-            if len(matches) == 1:
-                vehicle = matches[0]
-            else:
-                options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
-                select = Select(placeholder="Выберите технику...", options=options)
-                view = VehicleInfoSelectView(ctx.author.id, matches, select, self)
-                await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
-                return
-
-        embed = await self.build_vehicle_info_embed(vehicle)
-        await ctx.send(embed=embed)
-
-    async def build_vehicle_info_embed(self, vehicle: dict) -> discord.Embed:
         embed = discord.Embed(
-            title=f"ℹ️ {vehicle['name']}",
-            description=vehicle['description'],
-            color=discord.Color.blue()
+            title="Приглашение в альянс",
+            description=f"Вас приглашает {ctx.author.name} в альянс **{alliance['name']}**.",
+            color=discord.Color.green()
         )
-        embed.add_field(name="Стоимость", value=f"{vehicle['price']:,} 💵", inline=True)
-        embed.add_field(name="Страна", value=vehicle.get('country', '?'), inline=True)
-        if vehicle.get('wiki_link'):
-            embed.add_field(name="Википедия", value=f"[Открыть]({vehicle['wiki_link']})", inline=False)
-        if vehicle.get('image_url'):
-            embed.set_thumbnail(url=vehicle['image_url'])
-        else:
-            embed.set_footer(text="Изображения нет")
-        return embed
+        view = AllyInviteView(alliance['_id'], member.id, ctx.author.id)
+        try:
+            await member.send(embed=embed, view=view)
+            await ctx.send(f"📨 Приглашение отправлено {member.mention} в ЛС.")
+        except:
+            await ctx.send("❌ Не могу отправить ЛС этому игроку.")
 
-    @commands.command(name='iso')
+    @commands.command(name='ally-remove')
     @is_registered()
-    async def add_image(self, ctx, *, args: str):
-        """Добавить изображение к своей технике: !iso <название/часть названия> <ссылка>"""
+    async def ally_remove(self, ctx):
+        """Удалить ваш собственный альянс (только владелец)"""
+        alliances = await alliances_col.find({'owner_id': str(ctx.author.id)}).to_list(length=100)
+        if not alliances:
+            await ctx.send("❌ У вас нет альянсов для удаления.")
+            return
+        if len(alliances) == 1:
+            view = ConfirmDeleteAllyView(alliances[0]['_id'], ctx.author.id)
+            await ctx.send(f"Вы уверены, что хотите удалить альянс **{alliances[0]['name']}**?", view=view)
+        else:
+            options = [discord.SelectOption(label=a['name'][:100]) for a in alliances]
+            select = Select(placeholder="Выберите альянс...", options=options)
+            view = AllyRemoveSelectView(ctx.author.id, alliances, select)
+            await ctx.send("Выберите альянс для удаления:", view=view)
+
+    @commands.command(name='ally-kick')
+    @is_registered()
+    async def ally_kick(self, ctx, member: discord.Member):
+        """Кикнуть участника из вашего альянса"""
+        alliance = await alliances_col.find_one({'owner_id': str(ctx.author.id), 'members': str(member.id)})
+        if not alliance:
+            await ctx.send("❌ Этот игрок не состоит в вашем альянсе.")
+            return
+        # Удаляем участника
+        await alliances_col.update_one({'_id': alliance['_id']}, {'$pull': {'members': str(member.id)}})
+        thread = self.bot.get_channel(alliance['thread_id'])
+        if thread:
+            await thread.remove_user(member)
+        await ctx.send(f"{member.mention} исключён из альянса.")
+
+    @commands.command(name='iso-ally')
+    @is_registered()
+    async def iso_ally(self, ctx, *, args: str):
+        """Установить изображение альянса: !iso-ally <название> <ссылка>"""
         parts = args.rsplit(' ', 1)
         if len(parts) < 2:
-            await ctx.send("❌ Использование: `!iso <название/часть названия> <ссылка на изображение>`")
+            await ctx.send("❌ Использование: `!iso-ally <название альянса> <ссылка>`")
             return
-        name_or_part = parts[0].strip()
-        image_url = parts[1].strip()
-
-        regex = re.compile(re.escape(name_or_part), re.IGNORECASE)
-        vehicles = await vehicles_col.find({
-            "approved": True,
-            "submitter_id": str(ctx.author.id),
-            "name": {"$regex": regex}
-        }).to_list(length=25)
-
-        if not vehicles:
-            await ctx.send("❌ У вас нет одобренной техники с таким названием.")
+        name = parts[0].strip()
+        url = parts[1].strip()
+        alliance = await alliances_col.find_one({'name': name, 'owner_id': str(ctx.author.id)})
+        if not alliance:
+            await ctx.send("❌ Альянс не найден или вы не его владелец.")
             return
+        await alliances_col.update_one({'_id': alliance['_id']}, {'$set': {'image_url': url}})
+        await ctx.send("✅ Изображение альянса обновлено.")
 
-        if len(vehicles) == 1:
-            v = vehicles[0]
-            await vehicles_col.update_one({'_id': v['_id']}, {'$set': {'image_url': image_url}})
-            await ctx.send(f"✅ Изображение для **{v['name']}** обновлено.")
+    async def build_alliance_embed(self, alliance: dict, guild: discord.Guild) -> discord.Embed:
+        embed = discord.Embed(title=alliance['name'], description=alliance.get('description', ''), color=discord.Color.gold())
+        embed.add_field(name="Тип", value=alliance['type'], inline=True)
+        embed.add_field(name="Казна", value=f"{alliance.get('treasury', 0):,} 💵", inline=True)
+        embed.add_field(name="Налог", value=f"{alliance.get('tax_rate', 2)}%", inline=True)
+        owner = guild.get_member(int(alliance['owner_id']))
+        embed.add_field(name="Глава", value=owner.mention if owner else "Неизвестно", inline=False)
+        members = []
+        for uid in alliance['members']:
+            if uid != alliance['owner_id']:
+                member = guild.get_member(int(uid))
+                if member:
+                    user_data = await get_user(member.id)
+                    country = user_data.get('country')
+                    if country:
+                        members.append(f"{country} ({member.name})")
+                    else:
+                        members.append(member.name)
+        if members:
+            embed.add_field(name="Участники", value="\n".join(f"{i+1}. {m}" for i, m in enumerate(members)), inline=False)
         else:
-            options = [discord.SelectOption(label=v['name'][:100]) for v in vehicles[:25]]
-            select = Select(placeholder="Выберите технику...", options=options)
-            view = IsoSelectView(ctx.author.id, vehicles, select, image_url, self)
-            await ctx.send("Выберите технику, для которой нужно установить изображение:", view=view)
-
-    # ===== МОБИЛИЗАЦИЯ =====
-    @commands.command(name='mobilization')
-    @is_registered()
-    async def mobilization(self, ctx):
-        """Мобилизовать часть населения в солдат"""
-        user = await get_user(ctx.author.id)
-        population = user.get('population', 0)
-        if population == 0:
-            await ctx.send("❌ У вас нет населения.")
-            return
-
-        # Проверка, была ли уже использована мобилизация
-        if user.get('mobilization_used', False):
-            await ctx.send("❌ Вы уже мобилизовали население. Обратитесь к администратору для изменения лимита.")
-            return
-
-        # Процент мобилизации из профиля (админ может менять)
-        mob_percent = user.get('mobilization_percent', 2.5)
-        max_mobilizable = int(population * mob_percent / 100)
-        if max_mobilizable <= 0:
-            await ctx.send("❌ Недостаточно населения для мобилизации (нужен хотя бы 1 человек).")
-            return
-
-        today = datetime.now().strftime('%Y-%m-%d')
-        daily_doc = await daily_mobilization_col.find_one({'user_id': str(ctx.author.id), 'date_str': today})
-        already_mobilized = daily_doc['total'] if daily_doc else 0
-        remaining_daily = max(0, 350_000 - already_mobilized)
-        if remaining_daily == 0:
-            await ctx.send("❌ Дневной лимит мобилизации (350,000) уже исчерпан.")
-            return
-
-        embed = discord.Embed(
-            title="📯 Мобилизация",
-            description=f"Текущее население: **{population:,}**\n"
-                        f"Можно мобилизовать до **{max_mobilizable:,}** ({mob_percent}%)\n"
-                        f"Дневной лимит: уже мобилизовано **{already_mobilized:,}** / 350,000",
-            color=discord.Color.orange()
-        )
-        view = MobilizationView(ctx.author.id, max_mobilizable, remaining_daily, self)
-        await ctx.send(embed=embed, view=view)
-
-    async def perform_mobilization(self, interaction: discord.Interaction, user_id: int, quantity: int, message_link: str):
-        pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
-        match = re.match(pattern, message_link)
-        if not match:
-            return "❌ Неверный формат ссылки."
-        channel_id = match.group(1)
-        message_id = match.group(2)
-        if channel_id != "1363585142593032412":
-            return "❌ Ссылка должна вести в канал реформ (<#1363585142593032412>)."
-        existing = await mobilization_links_col.find_one({"message_id": message_id})
-        if existing:
-            return "❌ Эта ссылка уже использовалась для мобилизации."
-
-        user = await get_user(user_id)
-        population = user.get('population', 0)
-        mob_percent = user.get('mobilization_percent', 2.5)
-        max_mobilizable = int(population * mob_percent / 100)
-        if quantity > max_mobilizable:
-            return f"❌ Нельзя мобилизовать больше **{max_mobilizable:,}**."
-        if quantity <= 0:
-            return "❌ Количество должно быть положительным."
-
-        today = datetime.now().strftime('%Y-%m-%d')
-        daily_doc = await daily_mobilization_col.find_one({'user_id': str(user_id), 'date_str': today})
-        already = daily_doc['total'] if daily_doc else 0
-        if already + quantity > 350_000:
-            return f"❌ Превышен дневной лимит (уже {already:,}, можно ещё {max(0, 350_000 - already):,})."
-
-        new_population = population - quantity
-        await update_user(user_id, {
-            'population': new_population,
-            'mobilization_used': True  # Запрет повторной мобилизации
-        })
-        await add_item(user_id, "Обученный Солдат", quantity)
-
-        await daily_mobilization_col.update_one(
-            {'user_id': str(user_id), 'date_str': today},
-            {'$inc': {'total': quantity}, '$setOnInsert': {'date_str': today}},
-            upsert=True
-        )
-        await mobilization_links_col.insert_one({
-            "message_id": message_id,
-            "channel_id": channel_id,
-            "used_by": str(user_id),
-            "used_at": datetime.now().timestamp()
-        })
-
-        return f"✅ Мобилизовано **{quantity:,}** солдат. Население: {new_population:,}."
-
-# ========== UI ДЛЯ МАГАЗИНА ==========
-class ShopView(View):
-    def __init__(self, cog: Shop, author_id: int):
-        super().__init__(timeout=180)
-        self.cog = cog
-        self.author_id = author_id
-        self.filter_type = 'all'
-        self.filter_value = None
-        self.current_page = 0
-        self.message = None
-
-        self.add_item(CategoryButton("Все", 'all', discord.ButtonStyle.primary))
-        for cat in Shop.VEHICLE_CATEGORIES:
-            self.add_item(CategoryButton(cat, cat, discord.ButtonStyle.secondary))
-        self.add_item(SearchButton("🔍 Поиск по стране", discord.ButtonStyle.success))
-        self.add_item(PageButton("⬅️", -1, discord.ButtonStyle.gray))
-        self.add_item(PageButton("➡️", 1, discord.ButtonStyle.gray))
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
-
-    async def update_message(self, interaction: discord.Interaction):
-        embed = await self.cog.build_shop_embed(self)
-        await interaction.response.edit_message(embed=embed, view=self)
-
-class CategoryButton(discord.ui.Button):
-    def __init__(self, label: str, filter_value: str, style):
-        super().__init__(label=label, style=style)
-        self.filter_value = filter_value
-    async def callback(self, interaction: discord.Interaction):
-        self.view.filter_type = 'all' if self.filter_value == 'all' else 'category'
-        self.view.filter_value = self.filter_value if self.filter_value != 'all' else None
-        self.view.current_page = 0
-        await self.view.update_message(interaction)
-
-class SearchButton(discord.ui.Button):
-    def __init__(self, label, style):
-        super().__init__(label=label, style=style)
-    async def callback(self, interaction: discord.Interaction):
-        modal = CountrySearchModal(self.view)
-        await interaction.response.send_modal(modal)
-
-class CountrySearchModal(Modal, title="Поиск по стране"):
-    country = TextInput(label="Введите название страны", placeholder="Франция", max_length=50)
-    def __init__(self, shop_view: ShopView):
-        super().__init__()
-        self.shop_view = shop_view
-    async def on_submit(self, interaction: discord.Interaction):
-        self.shop_view.filter_type = 'search'
-        self.shop_view.filter_value = self.country.value.strip()
-        self.shop_view.current_page = 0
-        await self.shop_view.update_message(interaction)
-
-class PageButton(discord.ui.Button):
-    def __init__(self, label, delta, style):
-        super().__init__(label=label, style=style)
-        self.delta = delta
-    async def callback(self, interaction: discord.Interaction):
-        all_vehicles = await vehicles_col.find({"approved": True}).to_list(length=None)
-        if self.view.filter_type == 'category':
-            vehicles = [v for v in all_vehicles if v.get('category') == self.view.filter_value]
-        elif self.view.filter_type == 'search':
-            vehicles = [v for v in all_vehicles if v.get('country', '').lower() == (self.view.filter_value or '').lower()]
-        else:
-            vehicles = all_vehicles
-        total = len(vehicles)
-        per_page = 5
-        max_page = max(0, (total - 1) // per_page)
-        new_page = self.view.current_page + self.delta
-        if 0 <= new_page <= max_page:
-            self.view.current_page = new_page
-        await self.view.update_message(interaction)
-
-# ========== UI ДЛЯ ДОБАВЛЕНИЯ ТЕХНИКИ ==========
-class StartAddView(View):
-    def __init__(self, cog: Shop, user_id: int, limit_info: str):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.user_id = user_id
-        self.limit_info = limit_info
-    @button(label="Заполнить заявку", style=discord.ButtonStyle.primary)
-    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VehicleInfoModal(self.cog, self.user_id))
-
-class ModernizationStartView(View):
-    def __init__(self, cog: Shop, user_id: int, limit_info: str):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.user_id = user_id
-        self.limit_info = limit_info
-
-    @button(label="Модернизировать технику", style=discord.ButtonStyle.primary)
-    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ModernizationModal(self.cog, self.user_id))
-
-class VehicleInfoModal(Modal, title="Заполните данные техники"):
-    name = TextInput(label="Название", placeholder="Т-90", max_length=80)
-    description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Основной боевой танк...", max_length=1000)
-    price = TextInput(label="Стоимость", placeholder="5000000", max_length=20)
-    wiki_link = TextInput(label="Ссылка на википедию (обязательно)", placeholder="https://ru.wikipedia.org/wiki/Т-90", max_length=200, required=True)
-
-    def __init__(self, cog: Shop, user_id: int):
-        super().__init__()
-        self.cog = cog
-        self.user_id = user_id
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            price_int = int(self.price.value.replace(',', '').replace(' ', ''))
-            if price_int <= 0: raise ValueError
-        except ValueError:
-            await interaction.response.send_message("❌ Стоимость должна быть положительным целым числом.", ephemeral=True)
-            return
-        self.cog.pending_add[self.user_id] = {
-            'name': self.name.value.strip(),
-            'description': self.description.value.strip(),
-            'price': price_int,
-            'wiki_link': self.wiki_link.value.strip(),
-            'is_modernization': False
-        }
-        view = CategorySelectView(self.cog, self.user_id)
-        await interaction.response.send_message("Выберите категорию техники:", view=view, ephemeral=True)
-
-class ModernizationModal(Modal, title="Данные модернизации"):
-    name = TextInput(label="Название техники", placeholder="Т-90М", max_length=80)
-    description = TextInput(label="Описание модернизации", style=discord.TextStyle.long, placeholder="Улучшенная версия...", max_length=1000)
-    price = TextInput(label="Стоимость", placeholder="6000000", max_length=20)
-
-    def __init__(self, cog: Shop, user_id: int):
-        super().__init__()
-        self.cog = cog
-        self.user_id = user_id
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            price_int = int(self.price.value.replace(',', '').replace(' ', ''))
-            if price_int <= 0: raise ValueError
-        except ValueError:
-            await interaction.response.send_message("❌ Неверная стоимость.", ephemeral=True)
-            return
-        self.cog.pending_add[self.user_id] = {
-            'name': self.name.value.strip(),
-            'description': self.description.value.strip(),
-            'price': price_int,
-            'wiki_link': None,
-            'is_modernization': True
-        }
-        view = CategorySelectView(self.cog, self.user_id)
-        await interaction.response.send_message("Выберите категорию:", view=view, ephemeral=True)
-
-class CategorySelectView(View):
-    def __init__(self, cog: Shop, user_id: int):
-        super().__init__(timeout=60)
-        self.cog = cog
-        self.user_id = user_id
-        select = Select(placeholder="Выберите категорию...", options=[discord.SelectOption(label=cat) for cat in Shop.VEHICLE_CATEGORIES])
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def select_callback(self, interaction: discord.Interaction):
-        category = interaction.data['values'][0]
-        data = self.cog.pending_add.get(self.user_id)
-        if not data:
-            await interaction.response.send_message("⚠️ Данные утеряны, начните заново.", ephemeral=True)
-            return
-        data['category'] = category
-        user = await get_user(self.user_id)
-        country = user.get('country', '?')
-        embed = discord.Embed(title="Подтверждение заявки", color=discord.Color.green())
-        embed.add_field(name="Название", value=data['name'], inline=False)
-        embed.add_field(name="Описание", value=data['description'], inline=False)
-        embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
-        embed.add_field(name="Категория", value=category, inline=True)
-        embed.add_field(name="Страна", value=country, inline=True)
-        if data.get('wiki_link'):
-            embed.add_field(name="Википедия", value=data['wiki_link'], inline=False)
-        submit_view = SubmitView(self.cog, self.user_id)
-        await interaction.response.send_message(embed=embed, view=submit_view, ephemeral=True)
-
-class SubmitView(View):
-    def __init__(self, cog: Shop, user_id: int):
-        super().__init__(timeout=60)
-        self.cog = cog
-        self.user_id = user_id
-    @button(label="Отправить заявку", style=discord.ButtonStyle.success)
-    async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        data = self.cog.pending_add.pop(self.user_id, None)
-        if not data:
-            await interaction.response.send_message("Данные не найдены.", ephemeral=True)
-            return
-        await self.cog.submit_application(self.user_id, data)
-        await interaction.response.send_message("✅ Заявка отправлена на рассмотрение!", ephemeral=True, delete_after=5)
-    @button(label="Отменить", style=discord.ButtonStyle.danger)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.cog.pending_add.pop(self.user_id, None)
-        await interaction.response.send_message("❌ Заявка отменена.", ephemeral=True)
-
-# ========== UI ДЛЯ МОДЕРАЦИИ ==========
-class ApprovalView(View):
-    def __init__(self, shop_cog: Shop, vehicle_id):
-        super().__init__(timeout=None)
-        self.shop = shop_cog
-        self.vehicle_id = vehicle_id
-
-    @button(label="Одобрить", style=discord.ButtonStyle.success)
-    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vehicle = await vehicles_col.find_one({'_id': self.vehicle_id})
-        if not vehicle:
-            await interaction.response.send_message("Заявка не найдена.", ephemeral=True)
-            return
-        await self.shop.approve_vehicle(self.vehicle_id, interaction.user)
-        embed = interaction.message.embeds[0]
-        embed.color = discord.Color.green()
-        embed.title = "✅ Заявка одобрена"
-        embed.set_footer(text=f"Одобрено модератором: {interaction.user}")
-        await interaction.message.edit(embed=embed, view=None)
-        await interaction.response.send_message("✅ Заявка одобрена.", ephemeral=True, delete_after=3)
-
-    @button(label="Отклонить", style=discord.ButtonStyle.danger)
-    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = RejectionModal(self.shop, self.vehicle_id, interaction.user, interaction.message)
-        await interaction.response.send_modal(modal)
-
-class RejectionModal(Modal, title="Причина отклонения"):
-    reason = TextInput(label="Причина", style=discord.TextStyle.long, placeholder="Не соответствует критериям...", max_length=500)
-    def __init__(self, shop_cog: Shop, vehicle_id, moderator: discord.Member, message: discord.Message):
-        super().__init__()
-        self.shop = shop_cog
-        self.vehicle_id = vehicle_id
-        self.moderator = moderator
-        self.message = message
-
-    async def on_submit(self, interaction: discord.Interaction):
-        reason_text = self.reason.value.strip()
-        await self.shop.reject_vehicle(self.vehicle_id, reason_text, self.moderator)
-        embed = self.message.embeds[0]
-        embed.color = discord.Color.red()
-        embed.title = "❌ Заявка отклонена"
-        embed.add_field(name="Причина", value=reason_text, inline=False)
-        embed.set_footer(text=f"Отклонено модератором: {self.moderator}")
-        await self.message.edit(embed=embed, view=None)
-        await interaction.response.send_message("❌ Заявка отклонена.", ephemeral=True, delete_after=3)
-
-# ========== ДОПОЛНИТЕЛЬНЫЕ VIEW ==========
-class VehicleInfoSelectView(View):
-    def __init__(self, author_id, matches, select: Select, shop_cog):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.matches = matches
-        self.shop_cog = shop_cog
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
-
-    async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        vehicle = next((v for v in self.matches if v['name'] == selected_name), None)
-        if vehicle:
-            embed = await self.shop_cog.build_vehicle_info_embed(vehicle)
-            await interaction.response.edit_message(embed=embed, view=None)
-
-class IsoSelectView(View):
-    def __init__(self, author_id, matches, select: Select, image_url: str, shop_cog):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.matches = matches
-        self.image_url = image_url
-        self.shop_cog = shop_cog
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
-
-    async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        vehicle = next((v for v in self.matches if v['name'] == selected_name), None)
-        if vehicle:
-            await vehicles_col.update_one({'_id': vehicle['_id']}, {'$set': {'image_url': self.image_url}})
-            await interaction.response.send_message(f"✅ Изображение для **{vehicle['name']}** обновлено.", ephemeral=True)
-
-class InvseeChoiceView(View):
-    def __init__(self, admin_id: int, target_id: int, bot):
-        super().__init__(timeout=30)
-        self.admin_id = admin_id
-        self.target_id = target_id
-        self.bot = bot
-
-    @button(label="В ЛС", style=discord.ButtonStyle.primary)
-    async def to_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.admin_id: return
-        user = self.bot.get_user(self.admin_id)
-        if user:
-            try:
-                await user.send(embed=await self._build_inventory_embed())
-                await interaction.response.send_message("Инвентарь отправлен в ЛС.", ephemeral=True)
-            except:
-                await interaction.response.send_message("Не могу отправить ЛС.", ephemeral=True)
-        else:
-            await interaction.response.send_message("Ошибка: пользователь не найден.", ephemeral=True)
-
-    @button(label="Сюда", style=discord.ButtonStyle.secondary)
-    async def here(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.admin_id: return
-        embed = await self._build_inventory_embed()
-        await interaction.response.edit_message(embed=embed, view=None)
-
-    async def _build_inventory_embed(self):
-        items = await get_inventory(self.target_id)
-        embed = discord.Embed(title="📦 Инвентарь", color=discord.Color.blue())
-        if not items:
-            embed.description = "Пусто."
-        else:
-            text = "\n".join(f"**{it['item_name']}** — {it['quantity']} шт." for it in items)
-            if len(text) > 2000:
-                text = text[:1997] + "..."
-            embed.description = text
+            embed.add_field(name="Участники", value="Нет", inline=False)
+        if alliance.get('image_url'):
+            embed.set_thumbnail(url=alliance['image_url'])
         return embed
 
-class ConfirmView(View):
-    def __init__(self, author_id, vehicle_id, name, admin_cog):
-        super().__init__(timeout=30)
-        self.author_id = author_id
-        self.vehicle_id = vehicle_id
-        self.name = name
-        self.admin_cog = admin_cog
+# ========== ДОПОЛНИТЕЛЬНЫЕ VIEW ДЛЯ АЛЬЯНСОВ ==========
+class AllyCreateModal(Modal, title="Создание альянса"):
+    name = TextInput(label="Название", placeholder="Введите название", max_length=80)
+    description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Описание альянса", max_length=500)
+    type = TextInput(label="Тип (Военный/Экономический/Военно-Экономический)", placeholder="Военный", max_length=30)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Проверка типа
+        valid_types = ["Военный", "Экономический", "Военно-Экономический"]
+        atype = self.type.value.strip()
+        if atype not in valid_types:
+            await interaction.response.send_message("❌ Неверный тип. Допустимые: Военный, Экономический, Военно-Экономический.", ephemeral=True)
+            return
+        user_id = interaction.user.id
+        # Проверка лимита
+        owned = await alliances_col.count_documents({'owner_id': str(user_id)})
+        if owned >= 2:
+            await interaction.response.send_message("❌ Вы уже создали 2 альянса.", ephemeral=True)
+            return
+        # Создаём документ
+        alliance = {
+            'name': self.name.value.strip(),
+            'description': self.description.value.strip(),
+            'type': atype,
+            'owner_id': str(user_id),
+            'members': [str(user_id)],
+            'treasury': 0,
+            'tax_rate': 2,
+            'image_url': None,
+            'thread_id': None,
+            'created_at': datetime.now().timestamp()
+        }
+        result = await alliances_col.insert_one(alliance)
+        alliance['_id'] = result.inserted_id
+
+        # Создаём приватную ветку
+        guild = interaction.guild
+        channel = guild.get_channel(ALLIANCE_CHANNEL_ID)
+        if not channel:
+            await interaction.response.send_message("❌ Канал для альянсов не найден.", ephemeral=True)
+            return
+        # Получаем роль администратора сервера для добавления
+        admin_role = discord.utils.get(guild.roles, permissions=discord.Permissions(administrator=True))
+        thread = await channel.create_thread(
+            name=f"Альянс {alliance['name']}",
+            type=discord.ChannelType.private_thread,
+            invitable=False
+        )
+        await thread.add_user(interaction.user)
+        if admin_role:
+            # Добавляем админов (через роль нельзя, но можно добавить всех админов индивидуально - тяжело. Упростим: добавим только владельца)
+            pass
+        await alliances_col.update_one({'_id': alliance['_id']}, {'$set': {'thread_id': thread.id}})
+        await interaction.response.send_message(f"✅ Альянс **{alliance['name']}** создан! Ветка: {thread.mention}", ephemeral=True)
+
+class AllySelectView(View):
+    def __init__(self, user_id, alliances, select, cog):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.alliances = alliances
+        self.cog = cog
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        name = interaction.data['values'][0]
+        alliance = next(a for a in self.alliances if a['name'] == name)
+        await self.cog.show_alliance_panel(interaction, alliance)
+        await interaction.response.edit_message(view=None)
+
+class AllyManageView(View):
+    def __init__(self, alliance, user_id, bot):
+        super().__init__(timeout=300)
+        self.alliance = alliance
+        self.user_id = user_id
+        self.bot = bot
+
+    @button(label="Переименовать Альянс", style=discord.ButtonStyle.primary)
+    async def rename(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        modal = AllyRenameModal(self.alliance['_id'])
+        await interaction.response.send_modal(modal)
+
+    @button(label="Выгнать из Альянса", style=discord.ButtonStyle.danger)
+    async def kick_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        members = self.alliance['members'][:]
+        if self.user_id in members: members.remove(self.user_id)  # не выгонять владельца
+        if not members:
+            await interaction.response.send_message("Некого выгонять.", ephemeral=True)
+            return
+        view = AllyKickListView(self.alliance['_id'], members, self.bot)
+        await interaction.response.send_message("Выберите кого выгнать:", view=view, ephemeral=True)
+
+    @button(label="Пополнить Казну", style=discord.ButtonStyle.success)
+    async def deposit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        modal = AllyDepositModal(self.alliance['_id'])
+        await interaction.response.send_modal(modal)
+
+    @button(label="Установить Налог Альянса", style=discord.ButtonStyle.secondary)
+    async def set_tax(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        modal = AllyTaxModal(self.alliance['_id'])
+        await interaction.response.send_modal(modal)
+
+    @button(label="Снять деньги с Казны", style=discord.ButtonStyle.danger)
+    async def withdraw(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id: return
+        modal = AllyWithdrawModal(self.alliance['_id'])
+        await interaction.response.send_modal(modal)
+
+class AllyRenameModal(Modal, title="Переименовать альянс"):
+    new_name = TextInput(label="Новое название", placeholder="Введите имя", max_length=80)
+    def __init__(self, alliance_id):
+        super().__init__()
+        self.aid = alliance_id
+    async def on_submit(self, interaction: discord.Interaction):
+        await alliances_col.update_one({'_id': self.aid}, {'$set': {'name': self.new_name.value.strip()}})
+        await interaction.response.send_message("✅ Альянс переименован.", ephemeral=True)
+
+class AllyDepositModal(Modal, title="Пополнить казну"):
+    amount = TextInput(label="Сумма", placeholder="100000", max_length=20)
+    def __init__(self, alliance_id):
+        super().__init__()
+        self.aid = alliance_id
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amt = int(self.amount.value)
+        except:
+            await interaction.response.send_message("❌ Неверная сумма.", ephemeral=True)
+            return
+        user = await get_user(interaction.user.id)
+        if user['balance'] < amt:
+            await interaction.response.send_message("❌ Недостаточно денег.", ephemeral=True)
+            return
+        await update_user(interaction.user.id, {'balance': user['balance'] - amt})
+        await alliances_col.update_one({'_id': self.aid}, {'$inc': {'treasury': amt}})
+        await interaction.response.send_message(f"✅ В казну добавлено {amt:,} 💵.", ephemeral=True)
+
+class AllyTaxModal(Modal, title="Установить налог"):
+    percent = TextInput(label="Процент (1-100)", placeholder="5", max_length=3)
+    def __init__(self, alliance_id):
+        super().__init__()
+        self.aid = alliance_id
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            p = int(self.percent.value)
+            if not 1 <= p <= 100: raise ValueError
+        except:
+            await interaction.response.send_message("❌ Введите число от 1 до 100.", ephemeral=True)
+            return
+        await alliances_col.update_one({'_id': self.aid}, {'$set': {'tax_rate': p}})
+        await interaction.response.send_message(f"✅ Налог установлен: {p}%.", ephemeral=True)
+
+class AllyWithdrawModal(Modal, title="Снять из казны"):
+    amount = TextInput(label="Сумма", placeholder="50000", max_length=20)
+    def __init__(self, alliance_id):
+        super().__init__()
+        self.aid = alliance_id
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amt = int(self.amount.value)
+        except:
+            await interaction.response.send_message("❌ Неверная сумма.", ephemeral=True)
+            return
+        alliance = await alliances_col.find_one({'_id': self.aid})
+        if alliance['treasury'] < amt:
+            await interaction.response.send_message("❌ В казне недостаточно средств.", ephemeral=True)
+            return
+        await alliances_col.update_one({'_id': self.aid}, {'$inc': {'treasury': -amt}})
+        user = await get_user(interaction.user.id)
+        await update_user(interaction.user.id, {'balance': user['balance'] + amt})
+        await interaction.response.send_message(f"✅ Вы сняли {amt:,} 💵.", ephemeral=True)
+
+class AllyKickListView(View):
+    def __init__(self, alliance_id, members, bot):
+        super().__init__(timeout=120)
+        self.aid = alliance_id
+        self.bot = bot
+        for uid in members:
+            self.add_item(AllyKickButton(uid, alliance_id, bot))
+        self.add_item(CancelButton())
+
+class AllyKickButton(discord.ui.Button):
+    def __init__(self, user_id, alliance_id, bot):
+        super().__init__(style=discord.ButtonStyle.danger, label=f"Выгнать {user_id}")
+        self.uid = user_id
+        self.aid = alliance_id
+        self.bot = bot
+    async def callback(self, interaction: discord.Interaction):
+        await alliances_col.update_one({'_id': self.aid}, {'$pull': {'members': self.uid}})
+        alliance = await alliances_col.find_one({'_id': self.aid})
+        thread = self.bot.get_channel(alliance['thread_id'])
+        if thread:
+            member = interaction.guild.get_member(int(self.uid))
+            if member:
+                await thread.remove_user(member)
+        await interaction.response.send_message(f"Игрок исключён.", ephemeral=True)
+        self.view.stop()
+
+class CancelButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(style=discord.ButtonStyle.secondary, label="Отмена")
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message("Действие отменено.", ephemeral=True)
+        self.view.stop()
+
+class AllyInviteView(View):
+    def __init__(self, alliance_id, invited_id, owner_id):
+        super().__init__(timeout=120)
+        self.aid = alliance_id
+        self.invited = invited_id
+        self.owner = owner_id
+
+    @button(label="Да", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.invited:
+            await interaction.response.send_message("Не вам.", ephemeral=True)
+            return
+        # Добавляем в альянс
+        await alliances_col.update_one({'_id': self.aid}, {'$addToSet': {'members': str(self.invited)}})
+        alliance = await alliances_col.find_one({'_id': self.aid})
+        # Даём доступ к ветке
+        thread = interaction.client.get_channel(alliance['thread_id'])
+        if thread:
+            await thread.add_user(interaction.user)
+        await interaction.response.send_message("✅ Вы вступили в альянс!", ephemeral=True)
+        self.stop()
+
+    @button(label="Нет", style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.invited:
+            await interaction.response.send_message("Не вам.", ephemeral=True)
+            return
+        await interaction.response.send_message("❌ Приглашение отклонено.", ephemeral=True)
+        self.stop()
+
+    async def on_timeout(self):
+        # Уведомить владельца? Необязательно.
+        pass
+
+class ConfirmDeleteAllyView(View):
+    def __init__(self, alliance_id, user_id):
+        super().__init__(timeout=60)
+        self.aid = alliance_id
+        self.user_id = user_id
 
     @button(label="Удалить", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("Вы не можете использовать это.", ephemeral=True)
-            return
-        await self.admin_cog.delete_vehicle_by_id(self.vehicle_id, self.name, interaction)
+        if interaction.user.id != self.user_id: return
+        await delete_alliance(self.aid, interaction.client)
+        await interaction.response.send_message("✅ Альянс удалён.", ephemeral=True)
 
     @button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="Удаление отменено.", view=None)
+        await interaction.response.send_message("Отменено.", ephemeral=True)
 
-class DeleteSelectView(View):
-    def __init__(self, author_id, matches, select: Select):
+class AllyRemoveSelectView(View):
+    def __init__(self, user_id, alliances, select):
         super().__init__(timeout=60)
-        self.author_id = author_id
-        self.matches = matches
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
-
-    async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        vehicle = next(v for v in self.matches if v['name'] == selected_name)
-        await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
-
-class TakeSelectView(View):
-    def __init__(self, author_id: int, member: discord.Member, quantity: int, matches: list, select: Select, admin_cog):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.member = member
-        self.quantity = quantity
-        self.matches = matches
-        self.admin_cog = admin_cog
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
-
-    async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        item = next((it for it in self.matches if it['item_name'] == selected_name), None)
-        if item:
-            await self.admin_cog._process_take_removal(None, self.member, item, self.quantity, interaction)
-        self.stop()
-
-class UseSelectView(View):
-    def __init__(self, author_id: int, quantity: int, matches: list, select: Select, shop_cog):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.quantity = quantity
-        self.matches = matches
-        self.shop_cog = shop_cog
-        select.callback = self.select_callback
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
-
-    async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        item = next((it for it in self.matches if it['item_name'] == selected_name), None)
-        if item:
-            await self.shop_cog._process_use(interaction.user, item, self.quantity, interaction)
-        self.stop()
-
-class PlayersCountryView(View):
-    def __init__(self, guild: discord.Guild):
-        super().__init__(timeout=180)
-        self.guild = guild
-        self.mode = 'states'
-        self.message = None
-
-    async def build_embed(self, mode: str) -> discord.Embed:
-        reg_role = self.guild.get_role(REGISTERED_ROLE_ID)
-        country_role = self.guild.get_role(COUNTRY_ROLE_ID)
-        if not reg_role:
-            return discord.Embed(title="Ошибка", description="Роль зарегистрированного не найдена.")
-        members = [m for m in self.guild.members if reg_role in m.roles and not m.bot]
-        if mode == 'states':
-            state_members = []
-            for m in members:
-                if country_role and country_role in m.roles:
-                    user = await get_user(m.id)
-                    country = user.get('country')
-                    if country:
-                        state_members.append((country, m))
-            state_members.sort(key=lambda x: x[0].lower())
-            description = ""
-            for i, (country, member) in enumerate(state_members, 1):
-                description += f"**{i}.** {country} ({member.name})\n"
-            if not description:
-                description = "Нет государств."
-            embed = discord.Embed(title="🌍 Государства", description=description, color=discord.Color.blue())
-        else:
-            other_members = [m for m in members if not country_role or country_role not in m.roles]
-            other_members.sort(key=lambda m: m.name.lower())
-            description = ""
-            for i, member in enumerate(other_members, 1):
-                description += f"**{i}.** {member.name}\n"
-            if not description:
-                description = "Нет игроков без государства."
-            embed = discord.Embed(title="👥 Другие", description=description, color=discord.Color.greyple())
-        return embed
-
-    @button(label="Государства", style=discord.ButtonStyle.primary)
-    async def states_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.mode = 'states'
-        embed = await self.build_embed('states')
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @button(label="Другие", style=discord.ButtonStyle.secondary)
-    async def others_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.mode = 'others'
-        embed = await self.build_embed('others')
-        await interaction.response.edit_message(embed=embed, view=self)
-
-class TopSelectView(View):
-    def __init__(self, ctx):
-        super().__init__(timeout=120)
-        self.ctx = ctx
-        self.mode = 'balance'
-        self.message = None
-
-    async def build_embed(self, mode: str) -> discord.Embed:
-        if mode == 'gdp':
-            top = await economy_col.find().sort('gdp', -1).limit(10).to_list(length=10)
-            title = "📈 Топ-10 по ВВП"
-            value_key = 'gdp'
-        elif mode == 'population':
-            top = await economy_col.find().sort('population', -1).limit(10).to_list(length=10)
-            title = "👥 Топ-10 по населению"
-            value_key = 'population'
-        else:
-            top = await economy_col.find().sort('balance', -1).limit(10).to_list(length=10)
-            title = "💰 Топ-10 по балансу"
-            value_key = 'balance'
-
-        embed = discord.Embed(title=title, color=discord.Color.gold())
-        if not top:
-            embed.description = "Нет данных."
-            return embed
-
-        description = ""
-        for i, user_data in enumerate(top, 1):
-            try:
-                member = self.ctx.guild.get_member(int(user_data['_id']))
-                name = member.name if member else f"User{user_data['_id']}"
-            except:
-                name = f"User{user_data['_id']}"
-            country = user_data.get('country')
-            display = f"{country} ({name})" if country else name
-            value = user_data[value_key]
-            if value_key == 'population':
-                description += f"**{i}.** {display} — 👥 **{value:,}** чел.\n"
-            else:
-                description += f"**{i}.** {display} — 💵 **{value:,}**\n"
-        embed.description = description
-        return embed
-
-    @button(label="ВВП", style=discord.ButtonStyle.primary)
-    async def gdp_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.mode = 'gdp'
-        embed = await self.build_embed('gdp')
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @button(label="Население", style=discord.ButtonStyle.success)
-    async def pop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.mode = 'population'
-        embed = await self.build_embed('population')
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    @button(label="Баланс", style=discord.ButtonStyle.secondary)
-    async def bal_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.mode = 'balance'
-        embed = await self.build_embed('balance')
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.ctx.author.id
-
-# ========== UI ДЛЯ МОБИЛИЗАЦИИ ==========
-class MobilizationView(View):
-    def __init__(self, user_id: int, max_mobilizable: int, remaining_daily: int, cog: Shop):
-        super().__init__(timeout=120)
         self.user_id = user_id
-        self.max_mobilizable = max_mobilizable
-        self.remaining_daily = remaining_daily
-        self.cog = cog
+        self.alliances = alliances
+        select.callback = self.select_callback
+        self.add_item(select)
 
-    @button(label="Мобилизовать население", style=discord.ButtonStyle.primary)
-    async def mobilize_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Это не ваше меню.", ephemeral=True)
-            return
-        modal = MobilizationModal(self.max_mobilizable, self.remaining_daily, self.cog)
-        await interaction.response.send_modal(modal)
+    async def select_callback(self, interaction: discord.Interaction):
+        name = interaction.data['values'][0]
+        alliance = next(a for a in self.alliances if a['name'] == name)
+        view = ConfirmDeleteAllyView(alliance['_id'], self.user_id)
+        await interaction.response.send_message(f"Удалить альянс **{alliance['name']}**?", view=view, ephemeral=True)
 
-class MobilizationModal(Modal, title="Мобилизация населения"):
-    qty = TextInput(label="Количество солдат", placeholder="Введите число", max_length=10)
-    link = TextInput(label="Ссылка на сообщение в канале реформ", placeholder="https://discord.com/channels/...", max_length=200)
+class AdminAllyDeleteView(View):
+    def __init__(self, admin_id, alliances, select):
+        super().__init__(timeout=120)
+        self.admin_id = admin_id
+        self.alliances = alliances
+        select.callback = self.select_callback
+        self.add_item(select)
 
-    def __init__(self, max_mobilizable, remaining_daily, cog):
-        super().__init__()
-        self.max_mobilizable = max_mobilizable
-        self.remaining_daily = remaining_daily
-        self.cog = cog
+    async def select_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.admin_id: return
+        name = interaction.data['values'][0]
+        alliance = next(a for a in self.alliances if a['name'] == name)
+        await interaction.response.send_message(f"Удалить альянс **{name}**?", view=ConfirmDeleteAllyView(alliance['_id'], self.admin_id), ephemeral=True)
 
-    async def on_submit(self, interaction: discord.Interaction):
+async def delete_alliance(alliance_id, client):
+    alliance = await alliances_col.find_one({'_id': alliance_id})
+    if not alliance:
+        return
+    # Удаляем ветку
+    thread = client.get_channel(alliance['thread_id'])
+    if thread:
         try:
-            qty = int(self.qty.value)
-        except ValueError:
-            await interaction.response.send_message("❌ Количество должно быть числом.", ephemeral=True)
-            return
-        result = await self.cog.perform_mobilization(interaction, interaction.user.id, qty, self.link.value.strip())
-        await interaction.response.send_message(result, ephemeral=True)
+            await thread.delete()
+        except:
+            pass
+    # Удаляем документ
+    await alliances_col.delete_one({'_id': alliance_id})
 
-# ========== UI Баффов/Дебаффов ==========
+# ========== UI Баффов/Дебаффов (добавлено ранее) ==========
 async def get_buffs(user_id: int) -> list:
     cursor = buffs_col.find({'user_id': str(user_id)})
     return await cursor.to_list(length=100)
@@ -2175,6 +1661,11 @@ class RemoveBuffButton(discord.ui.Button):
         else:
             await interaction.response.send_message("❌ Не удалось удалить.", ephemeral=True)
 
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+async def get_user_alliances(user_id: int) -> list:
+    cursor = alliances_col.find({'members': str(user_id)})
+    return await cursor.to_list(length=None)
+
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
 async def setup_hook():
@@ -2182,6 +1673,7 @@ async def setup_hook():
     await bot.add_cog(Economy(bot))
     await bot.add_cog(Budget(bot))
     await bot.add_cog(Admin(bot))
+    await bot.add_cog(Alliance(bot))
     await bot.add_cog(Shop(bot))
 
 if __name__ == '__main__':
