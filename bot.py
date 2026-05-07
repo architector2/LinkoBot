@@ -23,7 +23,10 @@ inventory_col = db['inventory']
 daily_submissions_col = db['daily_submissions']
 mobilization_links_col = db['mobilization_links']
 daily_mobilization_col = db['daily_mobilization']
+<<<<<<< HEAD
 buffs_col = db['buffs']
+=======
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 
 # ID ролей
 REGISTERED_ROLE_ID = 1501510805169115176
@@ -275,9 +278,12 @@ USAGE_HINTS = {
     'mobilization': '❌ Команда `!mobilization` не требует аргументов. Открывает панель мобилизации.',
     'remove-sol': '❌ Использование: `!remove-sol @игрок <число>`\nПример: `!remove-sol @Undervud 5000`',
     'add-sol': '❌ Использование: `!add-sol @игрок <число>`\nПример: `!add-sol @Undervud 10000`',
+<<<<<<< HEAD
     'priziv-redakt': '❌ Использование: `!priziv-redakt @игрок <число>`\nПример: `!priziv-redakt @Undervud 10` (устанавливает % мобилизации, макс 25)',
     'abb-baff': '❌ Использование: `!abb-baff @игрок`',
     'modernization': '❌ Команда `!modernization` не требует аргументов.\nПросто напиши `!modernization` и следуй инструкциям.',
+=======
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 }
 
 @bot.event
@@ -344,7 +350,11 @@ class General(commands.Cog, name="⚙️ Основные"):
     async def info(self, ctx):
         """Информация о боте"""
         embed = discord.Embed(title="LinkoBot", description="Бот для сервера Военная-политическая-игра", color=discord.Color.blue())
+<<<<<<< HEAD
         embed.add_field(name="Версия", value="2.9.5", inline=False)
+=======
+        embed.add_field(name="Версия", value="2.8.0", inline=False)
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
         await ctx.send(embed=embed)
 
     @commands.command(name='players-country')
@@ -365,7 +375,11 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='collect', aliases=['coll'])
     @is_registered()
     async def collect(self, ctx):
+<<<<<<< HEAD
         """Собрать доход и прирост населения (с учётом баффов/дебаффов, содержания)"""
+=======
+        """Собрать доход и прирост населения (с учётом содержания)"""
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
         user = await get_user(ctx.author.id)
         if user['gdp'] == 0:
             await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
@@ -384,12 +398,15 @@ class Economy(commands.Cog, name="💰 Экономика"):
         income_per_hour = user['gdp'] / 48
         gross_income = int(income_per_hour * hours_passed)
 
+<<<<<<< HEAD
         # Баффы/дебаффы
         active_buffs = await buffs_col.find({'user_id': str(ctx.author.id), 'active': True}).to_list(length=None)
         net_buff = sum(b['percent'] for b in active_buffs)
         if net_buff != 0:
             gross_income = int(gross_income * (1 + net_buff / 100))
 
+=======
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
         # Бюджетные вычеты
         budget_social = user.get('budget_social', DEFAULT_BUDGETS['budget_social'])
         budget_education = user.get('budget_education', DEFAULT_BUDGETS['budget_education'])
@@ -1031,6 +1048,7 @@ class Admin(commands.Cog, name="👑 Админ"):
             return
         await add_item(member.id, "Обученный Солдат", quantity)
         await ctx.send(f"✅ {member.mention} получил **{quantity}** обученных солдат.")
+<<<<<<< HEAD
 
     @commands.command(name='priziv-redakt')
     @commands.has_permissions(administrator=True)
@@ -1048,6 +1066,8 @@ class Admin(commands.Cog, name="👑 Админ"):
         """Управление баффами/дебаффами игрока"""
         view = BuffManagerView(member, self.bot)
         await ctx.send(f"Управление баффами/дебаффами для {member.mention}", view=view)
+=======
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 
 # ===========================
 # 🛒 COG: МАГАЗИН
@@ -1117,6 +1137,23 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         if not user.get('country'):
             await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
             return
+<<<<<<< HEAD
+=======
+
+        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
+        if not can_submit:
+            await ctx.send(msg)
+            return
+
+        info = await get_daily_submission_info(ctx.author.id)
+        view = StartAddView(self, ctx.author.id, info)
+        await ctx.send(
+            f"Нажмите на кнопку чтобы зарегистрировать технику\n"
+            f"Лимит заявок за день {info}\n"
+            f"КД после отправки 1 час",
+            view=view
+        )
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 
         can_submit, msg = await check_daily_submission_limit(ctx.author.id)
         if not can_submit:
@@ -1142,7 +1179,11 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             "price": data['price'],
             "category": data['category'],
             "country": country,
+<<<<<<< HEAD
             "wiki_link": data.get('wiki_link', ''),
+=======
+            "wiki_link": data['wiki_link'],
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
             "image_url": None,
             "submitter_id": str(user_id),
             "approved": False,
@@ -1152,10 +1193,14 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         result = await vehicles_col.insert_one(vehicle)
         vehicle['_id'] = result.inserted_id
 
+<<<<<<< HEAD
         if not modernization:
             can_submit, _ = await check_daily_submission_limit(user_id)
             if can_submit:
                 await record_submission(user_id)
+=======
+        await record_submission(user_id)
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 
         channel = self.bot.get_channel(self.APPROVAL_CHANNEL)
         if channel:
@@ -1166,10 +1211,14 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
             embed.add_field(name="Категория", value=data['category'], inline=True)
             embed.add_field(name="Страна", value=country, inline=True)
+<<<<<<< HEAD
             if not modernization:
                 embed.add_field(name="Википедия", value=data.get('wiki_link', 'Не указана'), inline=False)
             else:
                 embed.add_field(name="Википедия", value="Не требуется", inline=False)
+=======
+            embed.add_field(name="Википедия", value=data['wiki_link'] if data['wiki_link'] else "Не указана", inline=False)
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
             embed.set_footer(text=f"Отправитель: {self.bot.get_user(user_id)}")
             view = ApprovalView(self, vehicle['_id'])
             await channel.send(embed=embed, view=view)
@@ -1414,8 +1463,12 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         if population == 0:
             await ctx.send("❌ У вас нет населения.")
             return
+<<<<<<< HEAD
         mob_pct = user.get('mobilization_percent', 2.5)
         max_mobilizable = int(population * mob_pct / 100)
+=======
+        max_mobilizable = int(population * 0.025)
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
         if max_mobilizable <= 0:
             await ctx.send("❌ Недостаточно населения для мобилизации (нужен хотя бы 1 человек).")
             return
@@ -1431,7 +1484,11 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         embed = discord.Embed(
             title="📯 Мобилизация",
             description=f"Текущее население: **{population:,}**\n"
+<<<<<<< HEAD
                         f"Можно мобилизовать до **{max_mobilizable:,}** ({mob_pct}%)\n"
+=======
+                        f"Можно мобилизовать до **{max_mobilizable:,}** (2.5%)\n"
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
                         f"Дневной лимит: уже мобилизовано **{already_mobilized:,}** / 350,000",
             color=discord.Color.orange()
         )
@@ -1453,8 +1510,12 @@ class Shop(commands.Cog, name="🛒 Магазин"):
 
         user = await get_user(user_id)
         population = user.get('population', 0)
+<<<<<<< HEAD
         mob_pct = user.get('mobilization_percent', 2.5)
         max_mobilizable = int(population * mob_pct / 100)
+=======
+        max_mobilizable = int(population * 0.025)
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
         if quantity > max_mobilizable:
             return f"❌ Нельзя мобилизовать больше **{max_mobilizable:,}**."
         if quantity <= 0:
@@ -1484,6 +1545,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
 
         return f"✅ Мобилизовано **{quantity:,}** солдат. Население: {new_population:,}."
 
+<<<<<<< HEAD
     # ===== МОДЕРНИЗАЦИЯ =====
     @commands.command(name='modernization')
     @is_registered()
@@ -1509,6 +1571,9 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         )
 
 # ========== UI КЛАССЫ ==========
+=======
+# ========== UI ДЛЯ МАГАЗИНА ==========
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class ShopView(View):
     def __init__(self, cog: Shop, author_id: int):
         super().__init__(timeout=180)
@@ -1581,6 +1646,10 @@ class PageButton(discord.ui.Button):
             self.view.current_page = new_page
         await self.view.update_message(interaction)
 
+<<<<<<< HEAD
+=======
+# ========== UI ДЛЯ ДОБАВЛЕНИЯ ТЕХНИКИ ==========
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class StartAddView(View):
     def __init__(self, cog: Shop, user_id: int, limit_info: str):
         super().__init__(timeout=120)
@@ -1664,6 +1733,10 @@ class SubmitView(View):
         self.cog.pending_add.pop(self.user_id, None)
         await interaction.response.send_message("❌ Заявка отменена.", ephemeral=True)
 
+<<<<<<< HEAD
+=======
+# ========== UI ДЛЯ МОДЕРАЦИИ ==========
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class ApprovalView(View):
     def __init__(self, shop_cog: Shop, vehicle_id):
         super().__init__(timeout=None)
@@ -1709,6 +1782,10 @@ class RejectionModal(Modal, title="Причина отклонения"):
         await self.message.edit(embed=embed, view=None)
         await interaction.response.send_message("❌ Заявка отклонена.", ephemeral=True, delete_after=3)
 
+<<<<<<< HEAD
+=======
+# ========== ДОПОЛНИТЕЛЬНЫЕ VIEW ==========
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class VehicleInfoSelectView(View):
     def __init__(self, author_id, matches, select: Select, shop_cog):
         super().__init__(timeout=60)
@@ -1977,6 +2054,10 @@ class TopSelectView(View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.ctx.author.id
 
+<<<<<<< HEAD
+=======
+# ========== UI ДЛЯ МОБИЛИЗАЦИИ ==========
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 class MobilizationView(View):
     def __init__(self, user_id: int, max_mobilizable: int, remaining_daily: int, cog: Shop):
         super().__init__(timeout=120)
@@ -2012,6 +2093,7 @@ class MobilizationModal(Modal, title="Мобилизация населения"
         result = await self.cog.perform_mobilization(interaction, interaction.user.id, qty, self.link.value.strip())
         await interaction.response.send_message(result, ephemeral=True)
 
+<<<<<<< HEAD
 class BuffManagerView(View):
     def __init__(self, member: discord.Member, bot):
         super().__init__(timeout=120)
@@ -2179,6 +2261,8 @@ class SubmitModernizationView(View):
         self.cog.pending_add.pop(self.user_id, None)
         await interaction.response.send_message("❌ Заявка отменена.", ephemeral=True)
 
+=======
+>>>>>>> b7bfe79f75038bb604d6c918a2183fb7a9e2b1cc
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
 async def setup_hook():
