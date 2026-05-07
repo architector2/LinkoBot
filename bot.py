@@ -20,6 +20,9 @@ reform_links_col = db['reform_links']
 vehicles_col = db['vehicles']
 licenses_col = db['licenses']
 inventory_col = db['inventory']
+daily_submissions_col = db['daily_submissions']
+mobilization_links_col = db['mobilization_links']
+daily_mobilization_col = db['daily_mobilization']
 
 # ID ролей
 REGISTERED_ROLE_ID = 1501510805169115176
@@ -98,6 +101,60 @@ def is_registered():
         return True
     return commands.check(predicate)
 
+# ===== ЛИМИТЫ ЗАЯВОК =====
+async def check_daily_submission_limit(user_id: int) -> tuple:
+    today = datetime.now().strftime('%Y-%m-%d')
+    doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
+    if not doc or doc.get('date_str') != today:
+        await daily_submissions_col.update_one(
+            {'user_id': str(user_id)},
+            {'$set': {'date_str': today, 'count': 5, 'first_submission_time': 0, 'last_submission_time': 0}},
+            upsert=True
+        )
+        return True, ''
+    if doc['count'] <= 0:
+        t0 = doc.get('first_submission_time', 0)
+        if t0:
+            reset_at = datetime.fromtimestamp(t0) + timedelta(hours=24)
+            remaining = reset_at - datetime.now()
+            if remaining.total_seconds() > 0:
+                hours, rem = divmod(remaining.seconds, 3600)
+                mins = rem // 60
+                return False, f"❌ Лимит заявок исчерпан. Сброс через {hours}ч {mins}мин."
+        return False, "❌ Лимит заявок исчерпан."
+    last_time = doc.get('last_submission_time', 0)
+    if last_time:
+        elapsed = datetime.now().timestamp() - last_time
+        if elapsed < 3600:
+            remaining = int(3600 - elapsed)
+            mins = remaining // 60
+            secs = remaining % 60
+            return False, f"⏰ Кулдаун! Подождите ещё {mins}м {secs}с перед следующей заявкой."
+    return True, ''
+
+async def record_submission(user_id: int):
+    today = datetime.now().strftime('%Y-%m-%d')
+    doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
+    if not doc or doc.get('date_str') != today:
+        await daily_submissions_col.update_one(
+            {'user_id': str(user_id)},
+            {'$set': {'date_str': today, 'count': 4, 'first_submission_time': datetime.now().timestamp(), 'last_submission_time': datetime.now().timestamp()}},
+            upsert=True
+        )
+    else:
+        new_count = max(doc['count'] - 1, 0)
+        update = {'count': new_count, 'last_submission_time': datetime.now().timestamp()}
+        if doc.get('first_submission_time', 0) == 0:
+            update['first_submission_time'] = datetime.now().timestamp()
+        await daily_submissions_col.update_one({'user_id': str(user_id)}, {'$set': update})
+
+async def get_daily_submission_info(user_id: int) -> str:
+    today = datetime.now().strftime('%Y-%m-%d')
+    doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
+    if not doc or doc.get('date_str') != today:
+        return "5/5"
+    return f"{doc['count']}/5"
+
 # ===== ВЫЧИСЛЕНИЕ НЕДОВОЛЬСТВА =====
 def calculate_unhappiness_speed(user: dict) -> float:
     speed = 0.0
@@ -156,6 +213,19 @@ async def get_inventory(user_id: int) -> list:
     cursor = inventory_col.find({'user_id': str(user_id)}).sort('item_name', 1)
     return await cursor.to_list(length=None)
 
+# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОБСЛУЖИВАНИЯ =====
+def get_vehicle_maintenance_cost_per_hour(gdp: int) -> int:
+    if gdp < 200_000_000_000:
+        return 500_000
+    elif gdp <= 500_000_000_000:
+        return 1_000_000
+    elif gdp <= 1_000_000_000_000:
+        return 2_500_000
+    else:
+        return 5_000_000
+
+SOLDIER_MAINTENANCE_PER_HOUR = 10_000
+
 # ===== СОБЫТИЯ =====
 @bot.event
 async def on_ready():
@@ -198,6 +268,9 @@ USAGE_HINTS = {
     'top': '❌ Команда `!top` не требует аргументов.',
     'vehicle-info': '❌ Использование: `!vehicle-info <название/часть названия>`\nПример: `!vehicle-info Т-90`',
     'iso': '❌ Использование: `!iso <название/часть названия> <ссылка на изображение>`\nПример: `!iso Т-90 https://i.imgur.com/abc.png` (доступно только владельцу техники)',
+    'mobilization': '❌ Команда `!mobilization` не требует аргументов. Открывает панель мобилизации.',
+    'remove-sol': '❌ Использование: `!remove-sol @игрок <число>`\nПример: `!remove-sol @Undervud 5000`',
+    'add-sol': '❌ Использование: `!add-sol @игрок <число>`\nПример: `!add-sol @Undervud 10000`',
 }
 
 @bot.event
@@ -264,7 +337,7 @@ class General(commands.Cog, name="⚙️ Основные"):
     async def info(self, ctx):
         """Информация о боте"""
         embed = discord.Embed(title="LinkoBot", description="Бот для сервера Военная-политическая-игра", color=discord.Color.blue())
-        embed.add_field(name="Версия", value="2.6.0", inline=False)
+        embed.add_field(name="Версия", value="2.8.0", inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(name='players-country')
@@ -285,7 +358,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='collect', aliases=['coll'])
     @is_registered()
     async def collect(self, ctx):
-        """Собрать доход и прирост населения"""
+        """Собрать доход и прирост населения (с учётом содержания)"""
         user = await get_user(ctx.author.id)
         if user['gdp'] == 0:
             await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
@@ -304,6 +377,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         income_per_hour = user['gdp'] / 48
         gross_income = int(income_per_hour * hours_passed)
 
+        # Бюджетные вычеты
         budget_social = user.get('budget_social', DEFAULT_BUDGETS['budget_social'])
         budget_education = user.get('budget_education', DEFAULT_BUDGETS['budget_education'])
         budget_healthcare = user.get('budget_healthcare', DEFAULT_BUDGETS['budget_healthcare'])
@@ -313,10 +387,33 @@ class Economy(commands.Cog, name="💰 Экономика"):
         deduct_education = int(gross_income * budget_education / 100)
         deduct_healthcare = int(gross_income * budget_healthcare / 100)
         deduct_other = int(gross_income * budget_other / 100)
-        total_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
-        net_income = gross_income - total_deduct
+        total_budget_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
+
+        # Содержание техники и солдат
+        inventory = await get_inventory(ctx.author.id)
+        vehicle_cost_per_hour = get_vehicle_maintenance_cost_per_hour(user['gdp'])
+        total_vehicle_maintenance = 0
+        total_soldier_maintenance = 0
+        total_units = 0
+        total_soldiers = 0
+
+        for item in inventory:
+            name = item['item_name']
+            qty = item['quantity']
+            if name == "Обученный Солдат":
+                total_soldiers += qty
+                total_soldier_maintenance += qty * SOLDIER_MAINTENANCE_PER_HOUR
+            else:
+                total_units += qty
+                total_vehicle_maintenance += qty * vehicle_cost_per_hour
+
+        vehicle_cost = int(total_vehicle_maintenance * hours_passed)
+        soldier_cost = int(total_soldier_maintenance * hours_passed)
+
+        net_income = gross_income - total_budget_deduct - vehicle_cost - soldier_cost
         new_balance = user['balance'] + net_income
 
+        # Прирост населения
         population = user.get('population', 0)
         pop_gained = 0
         new_population = population
@@ -354,6 +451,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         embed.add_field(name="ВВП", value=f"{user['gdp']:,} 💵", inline=True)
         embed.add_field(name="Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
         embed.add_field(name="Валовый доход", value=f"{gross_income:,} 💵", inline=False)
+
         embed.add_field(
             name="Вычеты бюджета",
             value=(
@@ -361,10 +459,24 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 f"📚 Образование ({budget_education}%): -{deduct_education:,} 💵\n"
                 f"🏥 Здравоохранение ({budget_healthcare}%): -{deduct_healthcare:,} 💵\n"
                 f"📋 Иные расходы ({budget_other}%): -{deduct_other:,} 💵\n"
-                f"**Всего вычетов: -{total_deduct:,} 💵**"
+                f"**Всего вычетов: -{total_budget_deduct:,} 💵**"
             ),
             inline=False
         )
+
+        if vehicle_cost > 0:
+            embed.add_field(
+                name="🛠️ Содержание техники",
+                value=f"Кол-во единиц: {total_units:,}\nРасход: -{vehicle_cost:,} 💵",
+                inline=False
+            )
+        if soldier_cost > 0:
+            embed.add_field(
+                name="🪖 Содержание солдат",
+                value=f"Кол-во солдат: {total_soldiers:,}\nРасход: -{soldier_cost:,} 💵",
+                inline=False
+            )
+
         embed.add_field(name="📌 Чистая прибыль", value=f"+{net_income:,} 💵", inline=False)
         embed.add_field(name="💰 Новый баланс", value=f"{new_balance:,} 💵", inline=False)
 
@@ -382,7 +494,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
     async def reforms(self, ctx, amount: int = None, *, message_link: str = None):
         """Вложить деньги в ВВП (требуется ссылка на сообщение из канала реформ)"""
         if amount is None or message_link is None:
-            await ctx.send("❌ Использование: `!reforms <сумма> <ссылка на сообщение из канала реформ>`\nПример: `!reforms 1000000 https://discord.com/channels/...`")
+            await ctx.send(USAGE_HINTS['reforms'])
             return
         if amount <= 0:
             await ctx.send("❌ Сумма должна быть больше 0!")
@@ -782,7 +894,7 @@ class Admin(commands.Cog, name="👑 Админ"):
     async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
         await vehicles_col.delete_one({'_id': vehicle_id})
         await licenses_col.delete_many({'vehicle_name': name})
-        await inventory_col.delete_many({'item_name': name})   # удаляем из инвентарей
+        await inventory_col.delete_many({'item_name': name})
         if interaction:
             await interaction.response.send_message(f"✅ Техника **{name}** удалена из магазина.", ephemeral=True)
 
@@ -876,6 +988,29 @@ class Admin(commands.Cog, name="👑 Админ"):
         embed.add_field(name="Новый баланс", value=f"{new_balance:,} 💵")
         await ctx.send(embed=embed)
 
+    @commands.command(name='remove-sol')
+    @commands.has_permissions(administrator=True)
+    async def remove_soldiers(self, ctx, member: discord.Member, quantity: int):
+        """Убрать солдат у игрока"""
+        if quantity <= 0:
+            await ctx.send("❌ Количество должно быть больше 0.")
+            return
+        success = await remove_item(member.id, "Обученный Солдат", quantity)
+        if success:
+            await ctx.send(f"✅ У {member.mention} убрано **{quantity}** обученных солдат.")
+        else:
+            await ctx.send(f"❌ У игрока недостаточно солдат.")
+
+    @commands.command(name='add-sol')
+    @commands.has_permissions(administrator=True)
+    async def add_soldiers(self, ctx, member: discord.Member, quantity: int):
+        """Добавить солдат игроку"""
+        if quantity <= 0:
+            await ctx.send("❌ Количество должно быть больше 0.")
+            return
+        await add_item(member.id, "Обученный Солдат", quantity)
+        await ctx.send(f"✅ {member.mention} получил **{quantity}** обученных солдат.")
+
 # ===========================
 # 🛒 COG: МАГАЗИН
 # ===========================
@@ -931,7 +1066,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             embed.add_field(name="Нет техники", value="Здесь пока пусто", inline=False)
         else:
             for v in page_vehicles:
-                # Убрали страну из начала строки, показываем только название и стоимость
                 name = f"**{v['name']}** — {v['price']:,} 💵"
                 desc = v['description'][:80] + ('...' if len(v['description']) > 80 else '')
                 embed.add_field(name=name, value=desc, inline=False)
@@ -945,8 +1079,20 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         if not user.get('country'):
             await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
             return
-        start_view = StartAddView(self, ctx.author.id)
-        await ctx.send("Нажмите кнопку, чтобы начать заполнение заявки на технику.", view=start_view)
+
+        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
+        if not can_submit:
+            await ctx.send(msg)
+            return
+
+        info = await get_daily_submission_info(ctx.author.id)
+        view = StartAddView(self, ctx.author.id, info)
+        await ctx.send(
+            f"Нажмите на кнопку чтобы зарегистрировать технику\n"
+            f"Лимит заявок за день {info}\n"
+            f"КД после отправки 1 час",
+            view=view
+        )
 
     async def submit_application(self, user_id: int, data: dict):
         now = datetime.now().timestamp()
@@ -959,13 +1105,15 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             "category": data['category'],
             "country": country,
             "wiki_link": data['wiki_link'],
-            "image_url": None,          # пока нет изображения
+            "image_url": None,
             "submitter_id": str(user_id),
             "approved": False,
             "created_at": now,
         }
         result = await vehicles_col.insert_one(vehicle)
         vehicle['_id'] = result.inserted_id
+
+        await record_submission(user_id)
 
         channel = self.bot.get_channel(self.APPROVAL_CHANNEL)
         if channel:
@@ -1139,7 +1287,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             else:
                 await ctx.send(err)
 
-    # ----- Информация о технике -----
     @commands.command(name='vehicle-info')
     @is_registered()
     async def vehicle_info(self, ctx, *, name_or_part: str):
@@ -1154,7 +1301,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             if len(matches) == 1:
                 vehicle = matches[0]
             else:
-                # Выбор из списка
                 options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
                 select = Select(placeholder="Выберите технику...", options=options)
                 view = VehicleInfoSelectView(ctx.author.id, matches, select, self)
@@ -1174,19 +1320,16 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         embed.add_field(name="Страна", value=vehicle.get('country', '?'), inline=True)
         if vehicle.get('wiki_link'):
             embed.add_field(name="Википедия", value=f"[Открыть]({vehicle['wiki_link']})", inline=False)
-        # Изображение
         if vehicle.get('image_url'):
             embed.set_thumbnail(url=vehicle['image_url'])
         else:
             embed.set_footer(text="Изображения нет")
         return embed
 
-    # ----- Добавление изображения -----
     @commands.command(name='iso')
     @is_registered()
     async def add_image(self, ctx, *, args: str):
         """Добавить изображение к своей технике: !iso <название/часть названия> <ссылка>"""
-        # Разделяем аргументы: последнее слово – ссылка, остальное – название
         parts = args.rsplit(' ', 1)
         if len(parts) < 2:
             await ctx.send("❌ Использование: `!iso <название/часть названия> <ссылка на изображение>`")
@@ -1194,7 +1337,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         name_or_part = parts[0].strip()
         image_url = parts[1].strip()
 
-        # Найти технику, принадлежащую автору
         regex = re.compile(re.escape(name_or_part), re.IGNORECASE)
         vehicles = await vehicles_col.find({
             "approved": True,
@@ -1215,6 +1357,84 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             select = Select(placeholder="Выберите технику...", options=options)
             view = IsoSelectView(ctx.author.id, vehicles, select, image_url, self)
             await ctx.send("Выберите технику, для которой нужно установить изображение:", view=view)
+
+    # ===== МОБИЛИЗАЦИЯ =====
+    @commands.command(name='mobilization')
+    @is_registered()
+    async def mobilization(self, ctx):
+        """Мобилизовать часть населения в солдат"""
+        user = await get_user(ctx.author.id)
+        population = user.get('population', 0)
+        if population == 0:
+            await ctx.send("❌ У вас нет населения.")
+            return
+        max_mobilizable = int(population * 0.025)
+        if max_mobilizable <= 0:
+            await ctx.send("❌ Недостаточно населения для мобилизации (нужен хотя бы 1 человек).")
+            return
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        daily_doc = await daily_mobilization_col.find_one({'user_id': str(ctx.author.id), 'date_str': today})
+        already_mobilized = daily_doc['total'] if daily_doc else 0
+        remaining_daily = max(0, 350_000 - already_mobilized)
+        if remaining_daily == 0:
+            await ctx.send("❌ Дневной лимит мобилизации (350,000) уже исчерпан.")
+            return
+
+        embed = discord.Embed(
+            title="📯 Мобилизация",
+            description=f"Текущее население: **{population:,}**\n"
+                        f"Можно мобилизовать до **{max_mobilizable:,}** (2.5%)\n"
+                        f"Дневной лимит: уже мобилизовано **{already_mobilized:,}** / 350,000",
+            color=discord.Color.orange()
+        )
+        view = MobilizationView(ctx.author.id, max_mobilizable, remaining_daily, self)
+        await ctx.send(embed=embed, view=view)
+
+    async def perform_mobilization(self, interaction: discord.Interaction, user_id: int, quantity: int, message_link: str):
+        pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
+        match = re.match(pattern, message_link)
+        if not match:
+            return "❌ Неверный формат ссылки."
+        channel_id = match.group(1)
+        message_id = match.group(2)
+        if channel_id != "1363585142593032412":
+            return "❌ Ссылка должна вести в канал реформ (<#1363585142593032412>)."
+        existing = await mobilization_links_col.find_one({"message_id": message_id})
+        if existing:
+            return "❌ Эта ссылка уже использовалась для мобилизации."
+
+        user = await get_user(user_id)
+        population = user.get('population', 0)
+        max_mobilizable = int(population * 0.025)
+        if quantity > max_mobilizable:
+            return f"❌ Нельзя мобилизовать больше **{max_mobilizable:,}**."
+        if quantity <= 0:
+            return "❌ Количество должно быть положительным."
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        daily_doc = await daily_mobilization_col.find_one({'user_id': str(user_id), 'date_str': today})
+        already = daily_doc['total'] if daily_doc else 0
+        if already + quantity > 350_000:
+            return f"❌ Превышен дневной лимит (уже {already:,}, можно ещё {max(0, 350_000 - already):,})."
+
+        new_population = population - quantity
+        await update_user(user_id, {'population': new_population})
+        await add_item(user_id, "Обученный Солдат", quantity)
+
+        await daily_mobilization_col.update_one(
+            {'user_id': str(user_id), 'date_str': today},
+            {'$inc': {'total': quantity}, '$setOnInsert': {'date_str': today}},
+            upsert=True
+        )
+        await mobilization_links_col.insert_one({
+            "message_id": message_id,
+            "channel_id": channel_id,
+            "used_by": str(user_id),
+            "used_at": datetime.now().timestamp()
+        })
+
+        return f"✅ Мобилизовано **{quantity:,}** солдат. Население: {new_population:,}."
 
 # ========== UI ДЛЯ МАГАЗИНА ==========
 class ShopView(View):
@@ -1291,17 +1511,18 @@ class PageButton(discord.ui.Button):
 
 # ========== UI ДЛЯ ДОБАВЛЕНИЯ ТЕХНИКИ ==========
 class StartAddView(View):
-    def __init__(self, cog: Shop, user_id: int):
+    def __init__(self, cog: Shop, user_id: int, limit_info: str):
         super().__init__(timeout=120)
         self.cog = cog
         self.user_id = user_id
+        self.limit_info = limit_info
     @button(label="Заполнить заявку", style=discord.ButtonStyle.primary)
     async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(VehicleInfoModal(self.cog, self.user_id))
 
 class VehicleInfoModal(Modal, title="Заполните данные техники"):
     name = TextInput(label="Название", placeholder="Т-90", max_length=80)
-    description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Основной боевой танк...", max_length=1000)  # ★ увеличено до 1000
+    description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Основной боевой танк...", max_length=1000)
     price = TextInput(label="Стоимость", placeholder="5000000", max_length=20)
     wiki_link = TextInput(label="Ссылка на википедию (обязательно)", placeholder="https://ru.wikipedia.org/wiki/Т-90", max_length=200, required=True)
 
@@ -1418,7 +1639,7 @@ class RejectionModal(Modal, title="Причина отклонения"):
         await self.message.edit(embed=embed, view=None)
         await interaction.response.send_message("❌ Заявка отклонена.", ephemeral=True, delete_after=3)
 
-# ========== ПРОЧИЕ VIEW ==========
+# ========== ДОПОЛНИТЕЛЬНЫЕ VIEW ==========
 class VehicleInfoSelectView(View):
     def __init__(self, author_id, matches, select: Select, shop_cog):
         super().__init__(timeout=60)
@@ -1686,6 +1907,42 @@ class TopSelectView(View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.ctx.author.id
+
+# ========== UI ДЛЯ МОБИЛИЗАЦИИ ==========
+class MobilizationView(View):
+    def __init__(self, user_id: int, max_mobilizable: int, remaining_daily: int, cog: Shop):
+        super().__init__(timeout=120)
+        self.user_id = user_id
+        self.max_mobilizable = max_mobilizable
+        self.remaining_daily = remaining_daily
+        self.cog = cog
+
+    @button(label="Мобилизовать население", style=discord.ButtonStyle.primary)
+    async def mobilize_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Это не ваше меню.", ephemeral=True)
+            return
+        modal = MobilizationModal(self.max_mobilizable, self.remaining_daily, self.cog)
+        await interaction.response.send_modal(modal)
+
+class MobilizationModal(Modal, title="Мобилизация населения"):
+    qty = TextInput(label="Количество солдат", placeholder="Введите число", max_length=10)
+    link = TextInput(label="Ссылка на сообщение в канале реформ", placeholder="https://discord.com/channels/...", max_length=200)
+
+    def __init__(self, max_mobilizable, remaining_daily, cog):
+        super().__init__()
+        self.max_mobilizable = max_mobilizable
+        self.remaining_daily = remaining_daily
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qty = int(self.qty.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Количество должно быть числом.", ephemeral=True)
+            return
+        result = await self.cog.perform_mobilization(interaction, interaction.user.id, qty, self.link.value.strip())
+        await interaction.response.send_message(result, ephemeral=True)
 
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
