@@ -808,7 +808,7 @@ class Admin(commands.Cog, name="👑 Админ"):
             return
         if len(matches) == 1:
             v = matches[0]
-            confirm_view = ConfirmView(ctx.author.id, v['_id'], v['name'])
+            confirm_view = ConfirmView(ctx.author.id, v['_id'], v['name'], self)
             await ctx.send(f"Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
         else:
             options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
@@ -1425,17 +1425,20 @@ class InvseeChoiceView(View):
         return embed
 
 class ConfirmView(View):
-    def __init__(self, author_id, vehicle_id, name):
+    def __init__(self, author_id, vehicle_id, name, admin_cog):
         super().__init__(timeout=30)
         self.author_id = author_id
         self.vehicle_id = vehicle_id
         self.name = name
+        self.admin_cog = admin_cog          # сохраняем ссылку на Admin
+
     @button(label="Удалить", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("Вы не можете использовать это.", ephemeral=True)
             return
-        await Admin().delete_vehicle_by_id(self.vehicle_id, self.name, interaction)
+        await self.admin_cog.delete_vehicle_by_id(self.vehicle_id, self.name, interaction)
+
     @button(label="Отмена", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Удаление отменено.", view=None)
