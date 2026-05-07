@@ -1306,4 +1306,4 @@ async def setup_hook():
     await bot.add_cog(Shop(bot))
 
 if __name__ == '__main__':
-    bot.run(TOKEN)
+    bot.run(TOKEN) 
