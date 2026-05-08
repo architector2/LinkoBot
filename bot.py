@@ -1117,22 +1117,22 @@ class Admin(commands.Cog, name="👑 Админ"):
         view = BuffManageView(member, ctx.author)
         await ctx.send(f"Управление баффами/дебаффами для {member.mention}", view=view)
 
-@commands.command(name='ally-delete')
-@commands.has_permissions(administrator=True)
-async def ally_delete_admin(self, ctx):
-    """Удалить альянс (админ)"""
-    alliances = await alliances_col.find().to_list(length=None)
-    if not alliances:
-        await ctx.send("❌ Альянсов не найдено.")
-        return
+    @commands.command(name='ally-delete')
+    @commands.has_permissions(administrator=True)
+    async def ally_delete_admin(self, ctx):
+        """Удалить альянс (админ)"""
+        alliances = await alliances_col.find().to_list(length=None)
+        if not alliances:
+            await ctx.send("❌ Альянсов не найдено.")
+            return
 
-    alliances_cog = self.bot.get_cog('Alliances')   # получаем Cog альянсов
-    if alliances_cog is None:
-        await ctx.send("❌ Система альянсов не загружена.")
-        return
+        alliances_cog = self.bot.get_cog('Alliances')
+        if alliances_cog is None:
+            await ctx.send("❌ Система альянсов не загружена.")
+            return
 
-    view = AdminAllyDeleteView(ctx.author.id, alliances, alliances_cog)
-    await ctx.send("Выберите альянс для удаления:", view=view)
+        view = AdminAllyDeleteView(ctx.author.id, alliances, alliances_cog)
+        await ctx.send("Выберите альянс для удаления:", view=view)
 # ===========================
 # 🛒 COG: МАГАЗИН
 # ===========================
