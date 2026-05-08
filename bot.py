@@ -1575,9 +1575,11 @@ class Shop(commands.Cog, name="🛒 Магазин"):
 # ===========================
 # 🏛️ COG: АЛЬЯНСЫ
 # ===========================
-class Alliances(commands.Cog, name="🏛️ Альянсы"):   # copy this string
+class Alliances(commands.Cog, name="🏛️ Альянсы"):
     def __init__(self, bot):
+        print("✅ Alliances.__init__ вызван")   # отладочный вывод
         self.bot = bot
+        # … весь остальной код
 
     # ---------- КОМАНДА ally-create (С ЗАЯВКОЙ) ----------
     @commands.command(name='ally-create')
@@ -2775,6 +2777,6 @@ async def setup_hook():
     await bot.add_cog(Budget(bot))
     await bot.add_cog(Admin(bot))
     await bot.add_cog(Shop(bot))
-
+    await bot.add_cog(Alliances(bot))
 if __name__ == '__main__':
     bot.run(TOKEN)
