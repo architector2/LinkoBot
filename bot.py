@@ -2375,4 +2375,4 @@ async def setup_hook():
     await bot.add_cog(Alliances(bot))
 
 if __name__ == '__main__':
-    bot.run(TOKEN)
+    bot.run(TOKEN) 
