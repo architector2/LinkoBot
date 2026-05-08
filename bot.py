@@ -1943,7 +1943,11 @@ class AllyCreateStartView(View):
 class AllyCreateModal(Modal, title="Создание альянса"):
     name = TextInput(label="Название Альянса", placeholder="Великий Союз", max_length=80)
     description = TextInput(label="Описание Альянса", style=discord.TextStyle.long, placeholder="Могучий альянс...", max_length=500)
-    ally_type = TextInput(label="Тип (Экономический/Военный/Военно-Экономический)", placeholder="Военный", max_length=30)
+    ally_type = TextInput(
+        label="Тип альянса",          # короткий label!
+        placeholder="Экономический / Военный / Военно-Экономический",
+        max_length=30
+    )
 
     def __init__(self, cog: "Alliances", user_id: int):
         super().__init__()
