@@ -1154,7 +1154,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         embed = await self.build_shop_embed(view)
         view.message = await ctx.send(embed=embed, view=view)
 
-    async def build_shop_embed(self, view: "ShopView") -> discord.Embed:
+        async def build_shop_embed(self, view: ShopView) -> discord.Embed:
         all_vehicles = await vehicles_col.find({"approved": True}).to_list(length=None)
         if view.filter_type == 'category':
             vehicles = [v for v in all_vehicles if v.get('category') == view.filter_value]
@@ -1187,29 +1187,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
                 desc = v['description'][:80] + ('...' if len(v['description']) > 80 else '')
                 embed.add_field(name=name, value=desc, inline=False)
         return embed
-
-    @commands.command(name='add-vehicle', aliases=['add_vehicle'])
-    @is_registered()
-    async def add_vehicle(self, ctx):
-        """Добавить заявку на новую технику в магазин"""
-        user = await get_user(ctx.author.id)
-        if not user.get('country'):
-            await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
-            return
-
-        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
-        if not can_submit:
-            await ctx.send(msg)
-            return
-
-        info = await get_daily_submission_info(ctx.author.id)
-        view = StartAddView(self, ctx.author.id, info)
-        await ctx.send(
-            f"Нажмите на кнопку чтобы зарегистрировать технику\n"
-            f"Лимит заявок за день {info}\n"
-            f"КД после отправки 1 час",
-            view=view
-        )
 
     @commands.command(name='modernization')
     @is_registered()
@@ -2222,19 +2199,102 @@ class TakeSelectView(View):
         # Получаем выбранный элемент из select (не реализовано в упрощённом виде)
         await interaction.response.send_message("✅ Функция в разработке.", ephemeral=True)
 
+# ===========================
+# ИНТЕРАКТИВНЫЙ МАГАЗИН
+# ===========================
 class ShopView(View):
     def __init__(self, shop_cog, user_id):
         super().__init__(timeout=300)
         self.shop_cog = shop_cog
         self.user_id = user_id
         self.current_page = 0
-        self.filter_type = 'all'
-        self.filter_value = None
+        self.filter_type = 'all'       # 'all' / 'category' / 'search'
+        self.filter_value = None       # название категории или страна
         self.message = None
+
+        # Выпадающий список категорий
+        options = [discord.SelectOption(label=cat, value=cat) for cat in shop_cog.VEHICLE_CATEGORIES]
+        options.insert(0, discord.SelectOption(label="Все категории", value="all"))
+        self.category_select = Select(placeholder="Выберите категорию...", options=options)
+        self.category_select.callback = self.category_callback
+        self.add_item(self.category_select)
+
+        # Кнопка поиска по стране и кнопки пагинации
+        self.add_item(ShopSearchButton())
+        self.add_item(ShopPreviousButton())
+        self.add_item(ShopNextButton())
 
     async def update_message(self, interaction: discord.Interaction):
         embed = await self.shop_cog.build_shop_embed(self)
         await interaction.response.edit_message(embed=embed, view=self)
+
+    async def category_callback(self, interaction: discord.Interaction):
+        selected = interaction.data['values'][0]
+        if selected == 'all':
+            self.filter_type = 'all'
+            self.filter_value = None
+        else:
+            self.filter_type = 'category'
+            self.filter_value = selected
+        self.current_page = 0
+        await self.update_message(interaction)
+
+    async def search_by_country(self, interaction: discord.Interaction, country: str):
+        self.filter_type = 'search'
+        self.filter_value = country.strip().lower()
+        self.current_page = 0
+        await self.update_message(interaction)
+
+
+class ShopSearchButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="🔍 Поиск по стране", style=discord.ButtonStyle.secondary, row=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.view.user_id:
+            return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
+        await interaction.response.send_modal(ShopSearchModal(self.view))
+
+
+class ShopSearchModal(Modal, title="Поиск техники по стране"):
+    country = TextInput(label="Название страны", placeholder="Россия", max_length=50)
+
+    def __init__(self, shop_view: ShopView):
+        super().__init__()
+        self.shop_view = shop_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        country = self.country.value.strip()
+        if not country:
+            return await interaction.response.send_message("❌ Введите название страны.", ephemeral=True)
+        await self.shop_view.search_by_country(interaction, country)
+
+
+class ShopPreviousButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="◀️ Назад", style=discord.ButtonStyle.primary, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.view.user_id:
+            return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
+        if self.view.current_page > 0:
+            self.view.current_page -= 1
+            await self.view.update_message(interaction)
+        else:
+            await interaction.response.defer()
+
+
+class ShopNextButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Вперёд ▶️", style=discord.ButtonStyle.primary, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.view.user_id:
+            return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
+        # Можно добавить проверку на max_page внутри build_shop_embed,
+        # но для простоты увеличиваем, а там уже отобразится пустая страница или нет
+        self.view.current_page += 1
+        await self.view.update_message(interaction)
 
 class StartAddView(View):
     def __init__(self, shop_cog, user_id, limit_info):
