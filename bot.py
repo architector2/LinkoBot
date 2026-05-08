@@ -1126,7 +1126,7 @@ class Admin(commands.Cog, name="👑 Админ"):
             await ctx.send("❌ Альянсов не найдено.")
             return
 
-        alliances_cog = self.bot.get_cog('🏛️ Альянсы')   # exactly as in the class
+        alliances_cog = self.bot.get_cog("🏛️ Альянсы")  # paste it exactly   # exactly as in the class
         if alliances_cog is None:
             await ctx.send("❌ Система альянсов не загружена.")
             return
@@ -1575,7 +1575,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
 # ===========================
 # 🏛️ COG: АЛЬЯНСЫ
 # ===========================
-class Alliances(commands.Cog, name="🏛️ Альянсы"):
+class Alliances(commands.Cog, name="🏛️ Альянсы"):   # copy this string
     def __init__(self, bot):
         self.bot = bot
 
