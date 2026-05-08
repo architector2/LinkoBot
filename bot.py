@@ -6,8 +6,6 @@ import re
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import motor.motor_asyncio
-from bson.objectid import ObjectId
-from bson.errors import InvalidId
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -301,8 +299,7 @@ USAGE_HINTS = {
     'remove-sol': '❌ Использование: `!remove-sol @игрок <число>`\nПример: `!remove-sol @Undervud 5000`',
     'add-sol': '❌ Использование: `!add-sol @игрок <число>`\nПример: `!add-sol @Undervud 10000`',
     'priziv-redakt': '❌ Использование: `!priziv-redakt @игрок <число от 2.5 до 25>`',
-    'shell-baff': '❌ Команда `!shell-baff` не требует аргументов. Просто напиши `!shell-baff @игрок`.',
-    'delete-zayavka': '❌ Использование: `!delete-zayavka <ID заявки>`',
+    'abb-baff': '❌ Использование: `!abb-baff @игрок`',
     'modernization': '❌ Команда `!modernization` не требует аргументов.',
     'ally-create': '❌ Команда `!ally-create` не требует аргументов. Просто напиши `!ally-create`.',
     'ally': '❌ Команда `!ally` не требует аргументов.',
@@ -1113,44 +1110,12 @@ class Admin(commands.Cog, name="👑 Админ"):
                               color=discord.Color.green())
         await ctx.send(embed=embed)
 
-    @commands.command(name='shell-baff')
+   @commands.command(name='abb-baff') 
     @commands.has_permissions(administrator=True)
-    async def shell_baff(self, ctx, member: discord.Member):
-        """Управление баффами/дебаффами игрока (новый интерфейс)"""
-        buffs = await get_buffs(member.id)
-        buffs_sorted = sorted(buffs, key=lambda x: x.get('id', 0))
-        embed = discord.Embed(
-            title=f"🛡️ Баффы / Дебаффы для {member.display_name}",
-            color=discord.Color.blue()
-        )
-        if buffs_sorted:
-            desc = ""
-            for b in buffs_sorted:
-                buf_id = b.get('id', '?')
-                btype = "✅ Бафф" if b['type'] == 'buff' else "❌ Дебафф"
-                percent = b['percent']
-                reason = b.get('reason', 'без причины')
-                desc += f"**#{buf_id}** {btype} {percent:+.0f}% — {reason}\n"
-            embed.description = desc
-        else:
-            embed.description = "Пусто. Нажмите кнопку, чтобы добавить."
-        view = ShellBuffView(member, ctx.author)
-        view.message = await ctx.send(embed=embed, view=view)
-
-    @commands.command(name='delete-zayavka')
-    @commands.has_permissions(administrator=True)
-    async def delete_zayavka(self, ctx, application_id: str):
-        """Удалить заявку по ID (админ) – передайте ID заявки"""
-        try:
-            obj_id = ObjectId(application_id)
-        except InvalidId:
-            await ctx.send("❌ Неверный формат ID заявки. Укажите 24-символьную строку.")
-            return
-        result = await pending_alliances_col.delete_one({'_id': obj_id})
-        if result.deleted_count == 0:
-            await ctx.send("❌ Заявка с таким ID не найдена.")
-        else:
-            await ctx.send("✅ Заявка успешно удалена.")
+    async def abb_baff(self, ctx, member: discord.Member):
+        """Управление баффами/дебаффами игрока"""
+        view = BuffManageView(member, ctx.author)
+        await ctx.send(f"Управление баффами/дебаффами для {member.mention}", view=view)
 
     @commands.command(name='ally-delete')
     @commands.has_permissions(administrator=True)
@@ -1168,7 +1133,6 @@ class Admin(commands.Cog, name="👑 Админ"):
 
         view = AdminAllyDeleteView(ctx.author.id, alliances, alliances_cog)
         await ctx.send("Выберите альянс для удаления:", view=view)
-
 # ===========================
 # 🛒 COG: МАГАЗИН
 # ===========================
@@ -2482,115 +2446,33 @@ class MobilizationModal(Modal, title="Мобилизация"):
         msg = await self.shop_cog.perform_mobilization(interaction, self.user_id, qty, self.link.value)
         await interaction.response.send_message(msg, ephemeral=True)
 
-# ===== НОВЫЕ КЛАССЫ ДЛЯ БАФФОВ =====
-class ShellBuffView(View):
-    def __init__(self, member: discord.Member, admin: discord.Member):
+class BuffManageView(View):
+    def __init__(self, target: discord.Member, admin: discord.Member):
         super().__init__(timeout=120)
-        self.member = member
+        self.target = target
         self.admin = admin
-        self.message = None
 
-    @button(label="Добавить Де/Бафф", style=discord.ButtonStyle.success)
+    @button(label="Добавить бафф +10%", style=discord.ButtonStyle.success)
     async def add_buff(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.admin.id:
             return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
-        modal = AddBuffModal(self.member, self.admin, self)
-        await interaction.response.send_modal(modal)
+        await buffs_col.insert_one({'user_id': str(self.target.id), 'type': 'buff', 'percent': 10})
+        await interaction.response.send_message(f"✅ Бафф +10% добавлен {self.target.mention}.", ephemeral=True)
 
-    @button(label="Убрать Де/Бафф", style=discord.ButtonStyle.danger)
-    async def remove_buff(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @button(label="Добавить дебафф -10%", style=discord.ButtonStyle.danger)
+    async def add_debuff(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.admin.id:
             return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
-        modal = RemoveBuffModal(self.member, self.admin, self)
-        await interaction.response.send_modal(modal)
+        await buffs_col.insert_one({'user_id': str(self.target.id), 'type': 'debuff', 'percent': 10})
+        await interaction.response.send_message(f"✅ Дебафф -10% добавлен {self.target.mention}.", ephemeral=True)
 
-    async def update_embed(self, interaction: discord.Interaction):
-        buffs = await get_buffs(self.member.id)
-        buffs_sorted = sorted(buffs, key=lambda x: x.get('id', 0))
-        embed = discord.Embed(
-            title=f"🛡️ Баффы / Дебаффы для {self.member.display_name}",
-            color=discord.Color.blue()
-        )
-        if buffs_sorted:
-            desc = ""
-            for b in buffs_sorted:
-                buf_id = b.get('id', '?')
-                btype = "✅ Бафф" if b['type'] == 'buff' else "❌ Дебафф"
-                percent = b['percent']
-                reason = b.get('reason', 'без причины')
-                desc += f"**#{buf_id}** {btype} {percent:+.0f}% — {reason}\n"
-            embed.description = desc
-        else:
-            embed.description = "Пусто."
-        await interaction.response.edit_message(embed=embed, view=self)
-
-
-class AddBuffModal(Modal, title="Добавить Де/Бафф"):
-    percent = TextInput(label="Процент (-100 до 100, кроме 0)", placeholder="10 или -15", max_length=4)
-    reason = TextInput(label="Причина", placeholder="Санкции, военные действия...", max_length=200)
-
-    def __init__(self, member: discord.Member, admin: discord.Member, view: ShellBuffView):
-        super().__init__()
-        self.member = member
-        self.admin = admin
-        self.shell_view = view
-
-    async def on_submit(self, interaction: discord.Interaction):
+    @button(label="Сбросить все баффы/дебаффы", style=discord.ButtonStyle.secondary)
+    async def reset_buffs(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.admin.id:
             return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
+        await buffs_col.delete_many({'user_id': str(self.target.id)})
+        await interaction.response.send_message(f"✅ Баффы/дебаффы сброшены для {self.target.mention}.", ephemeral=True)
 
-        try:
-            p = int(self.percent.value)
-        except ValueError:
-            return await interaction.response.send_message("❌ Процент должен быть целым числом.", ephemeral=True)
-        if p == 0 or p < -100 or p > 100:
-            return await interaction.response.send_message("❌ Процент от -100 до 100, исключая ноль.", ephemeral=True)
-
-        reason = self.reason.value.strip() or "без причины"
-
-        existing = await buffs_col.find({'user_id': str(self.member.id)}).to_list(length=None)
-        next_id = 1
-        if existing:
-            max_id = max((b.get('id', 0) for b in existing), default=0)
-            next_id = max_id + 1
-
-        btype = 'buff' if p > 0 else 'debuff'
-        await buffs_col.insert_one({
-            'user_id': str(self.member.id),
-            'type': btype,
-            'percent': abs(p),
-            'reason': reason,
-            'id': next_id
-        })
-
-        await self.shell_view.update_embed(interaction)
-
-
-class RemoveBuffModal(Modal, title="Убрать Де/Бафф"):
-    number = TextInput(label="Номер баффа/дебаффа (ID)", placeholder="1", max_length=4)
-
-    def __init__(self, member: discord.Member, admin: discord.Member, view: ShellBuffView):
-        super().__init__()
-        self.member = member
-        self.admin = admin
-        self.shell_view = view
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if interaction.user.id != self.admin.id:
-            return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
-
-        try:
-            num = int(self.number.value)
-        except ValueError:
-            return await interaction.response.send_message("❌ Номер должен быть целым числом.", ephemeral=True)
-
-        result = await buffs_col.delete_one({'user_id': str(self.member.id), 'id': num})
-        if result.deleted_count == 0:
-            await interaction.response.send_message(f"❌ Бафф/дебафф с номером **{num}** не найден.", ephemeral=True)
-        else:
-            await self.shell_view.update_embed(interaction)
-
-# ===== ОСТАЛЬНЫЕ КЛАССЫ БЕЗ ИЗМЕНЕНИЙ =====
 class AllyInfoView(View):
     def __init__(self, cog: "Alliances", alliance: dict, user_id: int, is_owner: bool, bot):
         super().__init__(timeout=180)
@@ -2887,7 +2769,6 @@ class AdminAllyDeleteButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await self.view.cog.delete_alliance(self.alliance_id)
         await interaction.response.send_message("✅ Альянс удалён.", ephemeral=True)
-
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
 async def setup_hook():
@@ -2897,6 +2778,5 @@ async def setup_hook():
     await bot.add_cog(Admin(bot))
     await bot.add_cog(Shop(bot))
     await bot.add_cog(Alliances(bot))
-
 if __name__ == '__main__':
     bot.run(TOKEN)
