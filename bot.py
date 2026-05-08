@@ -1199,7 +1199,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
     @commands.command(name='add-vehicle', aliases=['add_vehicle'])
     @is_registered()
     async def add_vehicle(self, ctx):
-        """Добавить заявку на новую технику в магазин"""
+        """Подать заявку на новую технику"""
         user = await get_user(ctx.author.id)
         if not user.get('country'):
             await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
@@ -1211,13 +1211,82 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             return
 
         info = await get_daily_submission_info(ctx.author.id)
-        view = StartAddView(self, ctx.author.id, info)
-        await ctx.send(
-            f"Нажмите на кнопку чтобы зарегистрировать технику\n"
-            f"Лимит заявок за день {info}\n"
-            f"КД после отправки 1 час",
-            view=view
+        embed = discord.Embed(
+            title="🛒 Подача заявки на технику",
+            description="Нажмите на кнопку ниже, чтобы заполнить форму.",
+            color=discord.Color.blue()
         )
+        embed.add_field(name="📋 Лимит заявок", value=f"{info} заявок осталось сегодня.")
+        embed.set_footer(text="Кулдаун между заявками – 1 час")
+        view = StartAddView(self, ctx.author.id, info)
+        await ctx.send(embed=embed, view=view)
+
+class StartAddView(View):
+    def __init__(self, shop_cog, user_id, limit_info):
+        super().__init__(timeout=300)
+        self.shop_cog = shop_cog
+        self.user_id = user_id
+
+    @button(label="Зарегистрировать технику", style=discord.ButtonStyle.primary)
+    async def start_add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
+        modal = AddVehicleModal(self.shop_cog, self.user_id)
+        await interaction.response.send_modal(modal)
+
+
+class AddVehicleModal(Modal, title="Добавить технику"):
+    name = TextInput(label="Название техники", placeholder="Т-90", max_length=80)
+    description = TextInput(
+        label="Описание (до 1000 символов)",
+        style=discord.TextStyle.long,
+        placeholder="Основной боевой танк...",
+        max_length=1000
+    )
+    price = TextInput(label="Цена (в 💵)", placeholder="5000000", max_length=15)
+    wiki_link = TextInput(label="Ссылка на Википедию", placeholder="https://... (или 'нет')", max_length=200)
+    category_input = TextInput(
+        label="Тип техники",
+        placeholder="Сухопутная Техника / ВМФ / Воздушная Техника / Ракеты / ПВО / Другое",
+        max_length=50
+    )
+
+    def __init__(self, shop_cog, user_id):
+        super().__init__()
+        self.shop_cog = shop_cog
+        self.user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validate price
+        try:
+            price = int(self.price.value.replace(',', '').replace(' ', ''))
+            if price <= 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message("❌ Цена должна быть целым положительным числом.", ephemeral=True)
+
+        # Validate category
+        category = self.category_input.value.strip()
+        if category not in self.shop_cog.VEHICLE_CATEGORIES:
+            allowed = ', '.join(self.shop_cog.VEHICLE_CATEGORIES)
+            return await interaction.response.send_message(f"❌ Тип техники должен быть одним из: {allowed}.", ephemeral=True)
+
+        wiki = self.wiki_link.value.strip()
+        if wiki.lower() in ('', 'нет', 'no', 'none'):
+            wiki = None
+
+        data = {
+            'name': self.name.value.strip(),
+            'description': self.description.value.strip(),
+            'price': price,
+            'category': category,
+            'wiki_link': wiki,
+            'is_modernization': False
+        }
+
+        await self.shop_cog.submit_application(self.user_id, data)
+        await interaction.response.send_message("✅ Заявка успешно отправлена на рассмотрение!", ephemeral=True)
+
 
     @commands.command(name='modernization')
     @is_registered()
