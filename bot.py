@@ -1117,17 +1117,22 @@ class Admin(commands.Cog, name="👑 Админ"):
         view = BuffManageView(member, ctx.author)
         await ctx.send(f"Управление баффами/дебаффами для {member.mention}", view=view)
 
-    @commands.command(name='ally-delete')
-    @commands.has_permissions(administrator=True)
-    async def ally_delete_admin(self, ctx):
-        """Удалить альянс (админ)"""
-        alliances = await alliances_col.find().to_list(length=None)
-        if not alliances:
-            await ctx.send("❌ Альянсов не найдено.")
-            return
-        view = AdminAllyDeleteView(ctx.author.id, alliances, self.bot)
-        await ctx.send("Выберите альянс для удаления:", view=view)
+@commands.command(name='ally-delete')
+@commands.has_permissions(administrator=True)
+async def ally_delete_admin(self, ctx):
+    """Удалить альянс (админ)"""
+    alliances = await alliances_col.find().to_list(length=None)
+    if not alliances:
+        await ctx.send("❌ Альянсов не найдено.")
+        return
 
+    alliances_cog = self.bot.get_cog('Alliances')   # получаем Cog альянсов
+    if alliances_cog is None:
+        await ctx.send("❌ Система альянсов не загружена.")
+        return
+
+    view = AdminAllyDeleteView(ctx.author.id, alliances, alliances_cog)
+    await ctx.send("Выберите альянс для удаления:", view=view)
 # ===========================
 # 🛒 COG: МАГАЗИН
 # ===========================
@@ -2744,16 +2749,15 @@ class AllyRemoveSelectButton(discord.ui.Button):
 
 
 class AdminAllyDeleteView(View):
-    def __init__(self, admin_id: int, alliances: list, bot):
+    def __init__(self, admin_id: int, alliances: list, cog: "Alliances"):
         super().__init__(timeout=60)
         self.admin_id = admin_id
-        self.bot = bot
+        self.cog = cog                    # <-- сохраняем ссылку на Cog
         for alliance in alliances:
             self.add_item(AdminAllyDeleteButton(alliance['_id'], alliance['name']))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.admin_id
-
 
 class AdminAllyDeleteButton(discord.ui.Button):
     def __init__(self, alliance_id, name):
@@ -2761,11 +2765,8 @@ class AdminAllyDeleteButton(discord.ui.Button):
         self.alliance_id = alliance_id
 
     async def callback(self, interaction: discord.Interaction):
-        cog = interaction.client.get_cog('Alliances')
-        if cog:
-            await cog.delete_alliance(self.alliance_id)
-            await interaction.response.send_message("✅ Альянс удалён.", ephemeral=True)
-
+        await self.view.cog.delete_alliance(self.alliance_id)
+        await interaction.response.send_message("✅ Альянс удалён.", ephemeral=True)
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
 async def setup_hook():
