@@ -1126,7 +1126,7 @@ class Admin(commands.Cog, name="👑 Админ"):
             await ctx.send("❌ Альянсов не найдено.")
             return
 
-        alliances_cog = self.bot.get_cog('Alliances')
+        alliances_cog = self.bot.get_cog('🏛️ Альянсы')   # exactly as in the class
         if alliances_cog is None:
             await ctx.send("❌ Система альянсов не загружена.")
             return
@@ -2775,7 +2775,6 @@ async def setup_hook():
     await bot.add_cog(Budget(bot))
     await bot.add_cog(Admin(bot))
     await bot.add_cog(Shop(bot))
-    await bot.add_cog(Alliances(bot))
 
 if __name__ == '__main__':
     bot.run(TOKEN)
