@@ -974,7 +974,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         else:
             options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
             select = Select(placeholder="Выберите технику для удаления...", options=options)
-            view = DeleteSelectView(ctx.author.id, matches, select)
+            view = DeleteSelectView(ctx.author.id, matches, select, self)
             await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
 
     async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
@@ -2171,20 +2171,32 @@ class ConfirmView(View):
         await interaction.response.edit_message(content="Удаление отменено.", view=None)
 
 class DeleteSelectView(View):
-    def __init__(self, admin_id, matches, select: Select):
+    def __init__(self, admin_id, matches, select: Select, admin_cog):
         super().__init__(timeout=60)
         self.admin_id = admin_id
         self.matches = matches
+        self.admin_cog = admin_cog
+        self.selected_value = None
+        select.callback = self.select_callback
         self.add_item(select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.admin_id
 
+    async def select_callback(self, interaction: discord.Interaction):
+        self.selected_value = interaction.data['values'][0]
+        await interaction.response.defer()
+
     @button(label="Удалить выбранное", style=discord.ButtonStyle.danger, row=1)
     async def delete_selected(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        # В реальности нужно получить выбранный элемент из select, но для простоты реализации пропустим
-        await interaction.followup.send("✅ Удаление выполнено.", ephemeral=True)
+        if not self.selected_value:
+            await interaction.response.send_message("❌ Сначала выберите технику.", ephemeral=True)
+            return
+        for v in self.matches:
+            if str(v['_id']) == self.selected_value:
+                await self.admin_cog.delete_vehicle_by_id(v['_id'], v['name'], interaction)
+                return
+        await interaction.response.send_message("❌ Техника не найдена.", ephemeral=True)
 
 class InvseeChoiceView(View):
     def __init__(self, admin_id, target_id, bot):
@@ -2399,7 +2411,64 @@ class ModernizationStartView(View):
     async def start_modernization(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
-        await interaction.response.send_message("✅ Функция в разработке.", ephemeral=True)
+        # Open the modernization modal instead of a stub message
+        modal = ModernizationModal(self.shop_cog, self.user_id)
+        await interaction.response.send_modal(modal)
+class ModernizationModal(Modal, title="Модернизация техники"):
+    name = TextInput(
+        label="Название техники",
+        placeholder="Т-90М",
+        max_length=80
+    )
+    description = TextInput(
+        label="Описание",
+        style=discord.TextStyle.long,
+        placeholder="Модернизированная версия...",
+        max_length=500
+    )
+    price = TextInput(
+        label="Стоимость",
+        placeholder="5000000",
+        max_length=15
+    )
+    category = TextInput(
+        label="Категория",
+        placeholder="Сухопутная Техника",
+        max_length=50
+    )
+
+    def __init__(self, shop_cog, user_id):
+        super().__init__()
+        self.shop_cog = shop_cog
+        self.user_id = user_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validate inputs
+        try:
+            price = int(self.price.value.replace(',', '').replace(' ', ''))
+            if price <= 0:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ Стоимость должна быть целым положительным числом.", ephemeral=True)
+            return
+
+        category = self.category.value.strip()
+        if category not in self.shop_cog.VEHICLE_CATEGORIES:
+            allowed = ', '.join(self.shop_cog.VEHICLE_CATEGORIES)
+            await interaction.response.send_message(f"❌ Категория должна быть одной из: {allowed}.", ephemeral=True)
+            return
+
+        # Prepare data and submit (with is_modernization=True)
+        data = {
+            'name': self.name.value.strip(),
+            'description': self.description.value.strip(),
+            'price': price,
+            'category': category,
+            'is_modernization': True   # This flag tells submit_application to skip wiki_link
+        }
+
+        await self.shop_cog.submit_application(self.user_id, data)
+        await interaction.response.send_message("✅ Заявка на модернизацию отправлена на рассмотрение.", ephemeral=True)
 
 class UseSelectView(View):
     def __init__(self, user_id, quantity, matches, select, shop_cog):
