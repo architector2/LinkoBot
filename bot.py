@@ -1110,12 +1110,58 @@ class Admin(commands.Cog, name="👑 Админ"):
                               color=discord.Color.green())
         await ctx.send(embed=embed)
 
-    @commands.command(name='abb-baff')
-    @commands.has_permissions(administrator=True)
-    async def abb_baff(self, ctx, member: discord.Member):
-        """Управление баффами/дебаффами игрока"""
-        view = BuffManageView(member, ctx.author)
-        await ctx.send(f"Управление баффами/дебаффами для {member.mention}", view=view)
+   @commands.command(name='shell-baff')
+@commands.has_permissions(administrator=True)
+async def shell_baff(self, ctx, member: discord.Member):
+    """Управление баффами/дебаффами игрока с панелью"""
+    buffs = await buffs_col.find({'user_id': str(member.id)}).to_list(length=None)
+    buffs = sorted(buffs, key=lambda x: x.get('buff_id', 0))
+    
+    embed = discord.Embed(
+        title=f"🔥 Баффы/Дебаффы для {member.name}",
+        color=discord.Color.gold()
+    )
+    
+    if buffs:
+        buff_list = ""
+        for idx, buff in enumerate(buffs, 1):
+            buff_type = "✅ Бафф" if buff['type'] == 'buff' else "❌ Дебафф"
+            reason = buff.get('reason', 'Без причины')
+            percent = buff['percent']
+            buff_list += f"**#{idx}** {buff_type} +{percent}% — {reason}\n"
+        embed.add_field(name="Текущие баффы/дебаффы:", value=buff_list, inline=False)
+    else:
+        embed.add_field(name="Баффы/Дебаффы", value="Нет", inline=False)
+    
+    view = ShellBaffView(member.id, ctx.author.id, buffs)
+    await ctx.send(embed=embed, view=view)
+
+@commands.command(name='delete-zayavka')
+@commands.has_permissions(administrator=True)
+async def delete_zayavka(self, ctx, application_id: str):
+    """Удалить заявку по ID (админ)"""
+    from bson.objectid import ObjectId
+    
+    try:
+        app_id = ObjectId(application_id)
+    except:
+        await ctx.send("❌ Неверный ID заявки.")
+        return
+    
+    # Проверяем все коллекции с заявками
+    app = await pending_alliances_col.find_one({'_id': app_id})
+    if app:
+        await pending_alliances_col.delete_one({'_id': app_id})
+        await ctx.send(f"✅ Заявка на альянс удалена: {app.get('name', 'Неизвестный альянс')}")
+        return
+    
+    vehicle = await vehicles_col.find_one({'_id': app_id})
+    if vehicle:
+        await vehicles_col.delete_one({'_id': app_id})
+        await ctx.send(f"✅ Заявка на технику удалена: {vehicle.get('name', 'Неизвестная техника')}")
+        return
+    
+    await ctx.send("❌ Заявка с таким ID не найдена.")
 
     @commands.command(name='ally-delete')
     @commands.has_permissions(administrator=True)
@@ -2769,6 +2815,144 @@ class AdminAllyDeleteButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await self.view.cog.delete_alliance(self.alliance_id)
         await interaction.response.send_message("✅ Альянс удалён.", ephemeral=True)
+
+# ===== UI ДЛЯ shell-baff =====
+
+class ShellBaffView(discord.ui.View):
+    """Основная панель управления баффами"""
+    def __init__(self, target_id: int, admin_id: int, buffs: list):
+        super().__init__(timeout=180)
+        self.target_id = target_id
+        self.admin_id = admin_id
+        self.buffs = buffs
+
+    @discord.ui.button(label="➕ Добавить Де/Бафф", style=discord.ButtonStyle.success)
+    async def add_baff(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.admin_id:
+            return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
+        
+        max_id = 0
+        if self.buffs:
+            max_id = max(b.get('buff_id', 0) for b in self.buffs)
+        new_buff_id = max_id + 1
+        
+        modal = AddBaffModal(self.target_id, new_buff_id)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="➖ Убрать Де/Бафф", style=discord.ButtonStyle.danger)
+    async def remove_baff(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.admin_id:
+            return await interaction.response.send_message("❌ Не для вас.", ephemeral=True)
+        
+        if not self.buffs:
+            return await interaction.response.send_message("❌ Нет баффов/дебаффов для удаления.", ephemeral=True)
+        
+        modal = RemoveBaffModal(self.target_id, len(self.buffs))
+        await interaction.response.send_modal(modal)
+
+
+class AddBaffModal(discord.ui.Modal, title="Добавить Де/Бафф"):
+    """Модальное окно для добавления баффа/дебаффа"""
+    
+    percent = discord.ui.TextInput(
+        label="Процент (1-100 для баффа, -1 до -100 для дебаффа)",
+        placeholder="10 или -10",
+        max_length=4
+    )
+    
+    reason = discord.ui.TextInput(
+        label="Причина",
+        placeholder="Активная игра, помощь серверу",
+        style=discord.TextStyle.long,
+        max_length=200
+    )
+    
+    def __init__(self, target_id: int, buff_id: int):
+        super().__init__()
+        self.target_id = target_id
+        self.buff_id = buff_id
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            percent = int(self.percent.value)
+        except ValueError:
+            return await interaction.response.send_message("❌ Процент должен быть числом.", ephemeral=True)
+        
+        if not (1 <= abs(percent) <= 100):
+            return await interaction.response.send_message("❌ Процент от 1 до 100 (или -1 до -100).", ephemeral=True)
+        
+        reason = self.reason.value.strip()
+        if not reason:
+            return await interaction.response.send_message("❌ Укажите причину.", ephemeral=True)
+        
+        if percent > 0:
+            buff_type = 'buff'
+            buff_percent = percent
+        else:
+            buff_type = 'debuff'
+            buff_percent = abs(percent)
+        
+        buff_data = {
+            'user_id': str(self.target_id),
+            'buff_id': self.buff_id,
+            'type': buff_type,
+            'percent': buff_percent,
+            'reason': reason,
+            'created_at': datetime.now().timestamp()
+        }
+        
+        await buffs_col.insert_one(buff_data)
+        
+        type_emoji = "✅" if buff_type == 'buff' else "❌"
+        await interaction.response.send_message(
+            f"{type_emoji} Добавлен {'бафф' if buff_type == 'buff' else 'дебафф'} №{self.buff_id} "
+            f"+{buff_percent}% ({reason})",
+            ephemeral=True
+        )
+
+
+class RemoveBaffModal(discord.ui.Modal, title="Удалить Де/Бафф"):
+    """Модальное окно для удаления баффа/дебаффа"""
+    
+    buff_number = discord.ui.TextInput(
+        label="Номер баффа/дебаффа для удаления",
+        placeholder="1",
+        max_length=3
+    )
+    
+    def __init__(self, target_id: int, max_buffs: int):
+        super().__init__()
+        self.target_id = target_id
+        self.max_buffs = max_buffs
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            buff_num = int(self.buff_number.value)
+        except ValueError:
+            return await interaction.response.send_message("❌ Номер должен быть числом.", ephemeral=True)
+        
+        if buff_num < 1:
+            return await interaction.response.send_message("❌ Номер должен быть 1 или больше.", ephemeral=True)
+        
+        buff = await buffs_col.find_one({
+            'user_id': str(self.target_id),
+            'buff_id': buff_num
+        })
+        
+        if not buff:
+            return await interaction.response.send_message(
+                f"❌ Бафф/Дебафф №{buff_num} не найден.",
+                ephemeral=True
+            )
+        
+        await buffs_col.delete_one({'_id': buff['_id']})
+        
+        type_name = "бафф" if buff['type'] == 'buff' else "дебафф"
+        await interaction.response.send_message(
+            f"✅ {type_name.capitalize()} №{buff_num} удалён ({buff['reason']})",
+            ephemeral=True
+        )
+
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
 async def setup_hook():
