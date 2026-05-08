@@ -2416,6 +2416,7 @@ class AllyInfoView(View):
             self.add_item(AllySetTaxButton())
             self.add_item(AllyWithdrawButton())
 
+
 class AllyRenameButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Переименовать", style=discord.ButtonStyle.primary)
@@ -2423,6 +2424,7 @@ class AllyRenameButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         modal = AllyRenameModal(self.view.cog, self.view.alliance['_id'])
         await interaction.response.send_modal(modal)
+
 
 class AllyRenameModal(Modal, title="Переименовать альянс"):
     new_name = TextInput(label="Новое название", placeholder="Новое имя альянса", max_length=80)
@@ -2434,8 +2436,20 @@ class AllyRenameModal(Modal, title="Переименовать альянс"):
 
     async def on_submit(self, interaction: discord.Interaction):
         new_name = self.new_name.value.strip()
+        alliance = await get_alliance(self.alliance_id)
         await alliances_col.update_one({'_id': self.alliance_id}, {'$set': {'name': new_name}})
+
+        # Переименовываем связанную ветку
+        if alliance and alliance.get('thread_id'):
+            thread = interaction.client.get_channel(alliance['thread_id'])
+            if thread and isinstance(thread, discord.Thread):
+                try:
+                    await thread.edit(name=f"🏛️ {new_name}")
+                except:
+                    pass
+
         await interaction.response.send_message(f"✅ Альянс переименован в **{new_name}**", ephemeral=True)
+
 
 class AllyKickMemberButton(discord.ui.Button):
     def __init__(self):
@@ -2447,17 +2461,28 @@ class AllyKickMemberButton(discord.ui.Button):
             await interaction.response.send_message("В альянсе нет участников.", ephemeral=True)
             return
 
-        options = [discord.SelectOption(label=str(m), value=m) for m in members[:25]]
-        select = Select(placeholder="Выберите участника...", options=options)
-        view = AllyKickSelectView(self.view.cog, self.view.alliance['_id'], select, self.view.bot)
+        # Передаём гильдию для получения имён участников
+        guild = interaction.guild
+        view = AllyKickSelectView(self.view.cog, self.view.alliance['_id'], members, self.view.bot, guild)
         await interaction.response.send_message("Выберите участника для удаления:", view=view, ephemeral=True)
 
+
 class AllyKickSelectView(View):
-    def __init__(self, cog, alliance_id, select: Select, bot):
+    def __init__(self, cog, alliance_id, members: list, bot, guild):
         super().__init__(timeout=60)
         self.cog = cog
         self.alliance_id = alliance_id
         self.bot = bot
+        self.guild = guild
+
+        # Создаём Select с читаемыми именами
+        options = []
+        for member_id in members[:25]:
+            member = guild.get_member(int(member_id)) if guild else None
+            label = member.display_name if member else member_id
+            options.append(discord.SelectOption(label=label, value=member_id))
+        select = Select(placeholder="Выберите участника...", options=options)
+        select.callback = self.select_callback          # <-- теперь привязан
         self.add_item(select)
 
     async def select_callback(self, interaction: discord.Interaction):
@@ -2467,9 +2492,14 @@ class AllyKickSelectView(View):
             members = alliance.get('members', [])
             if member_id in members:
                 members.remove(member_id)
-                await alliances_col.update_one({'_id': self.alliance_id}, {'$set': {'members': members}})
+                await alliances_col.update_one(
+                    {'_id': self.alliance_id},
+                    {'$set': {'members': members}}
+                )
                 await update_user(int(member_id), {'alliance_id': None, 'alliance_role': None})
-        await interaction.response.send_message("✅ Удалён.", ephemeral=True)
+
+        await interaction.response.send_message("✅ Участник удалён.", ephemeral=True)
+
 
 class AllyFundButton(discord.ui.Button):
     def __init__(self):
@@ -2478,6 +2508,7 @@ class AllyFundButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         modal = AllyFundModal(self.view.cog, self.view.alliance['_id'], self.view.user_id)
         await interaction.response.send_modal(modal)
+
 
 class AllyFundModal(Modal, title="Пополнить казну"):
     amount = TextInput(label="Сумма", placeholder="1000000", max_length=15)
@@ -2506,6 +2537,7 @@ class AllyFundModal(Modal, title="Пополнить казну"):
         await update_user(self.user_id, {'balance': user['balance'] - amount})
         await interaction.response.send_message(f"✅ Пополнено на {amount:,} 💵", ephemeral=True)
 
+
 class AllySetTaxButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Установить налог", style=discord.ButtonStyle.primary)
@@ -2513,6 +2545,7 @@ class AllySetTaxButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         modal = AllySetTaxModal(self.view.cog, self.view.alliance['_id'])
         await interaction.response.send_modal(modal)
+
 
 class AllySetTaxModal(Modal, title="Налог альянса"):
     percent = TextInput(label="Процент (1-100)", placeholder="5", max_length=3)
@@ -2533,6 +2566,7 @@ class AllySetTaxModal(Modal, title="Налог альянса"):
         await alliances_col.update_one({'_id': self.alliance_id}, {'$set': {'tax_percent': percent}})
         await interaction.response.send_message(f"✅ Налог {percent}%", ephemeral=True)
 
+
 class AllyWithdrawButton(discord.ui.Button):
     def __init__(self):
         super().__init__(label="Снять с казны", style=discord.ButtonStyle.danger)
@@ -2540,6 +2574,7 @@ class AllyWithdrawButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         modal = AllyWithdrawModal(self.view.cog, self.view.alliance['_id'], self.view.user_id)
         await interaction.response.send_modal(modal)
+
 
 class AllyWithdrawModal(Modal, title="Снять с казны"):
     amount = TextInput(label="Сумма", placeholder="1000000", max_length=15)
@@ -2566,6 +2601,7 @@ class AllyWithdrawModal(Modal, title="Снять с казны"):
         user = await get_user(self.user_id)
         await update_user(self.user_id, {'balance': user['balance'] + amount})
         await interaction.response.send_message(f"✅ Снято {amount:,} 💵", ephemeral=True)
+
 
 class AllyInviteView(View):
     def __init__(self, cog: "Alliances", alliance_id, alliance_name: str, user_id: int):
@@ -2602,6 +2638,7 @@ class AllyInviteView(View):
             return
         await interaction.response.send_message("❌ Отклонено.", ephemeral=True)
 
+
 class AllyRemoveConfirmView(View):
     def __init__(self, cog: "Alliances", alliance_id):
         super().__init__(timeout=60)
@@ -2617,6 +2654,7 @@ class AllyRemoveConfirmView(View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("❌ Удаление отменено.", ephemeral=True)
 
+
 class AllyRemoveSelectView(View):
     def __init__(self, user_id: int, alliances: list, cog: "Alliances"):
         super().__init__(timeout=60)
@@ -2628,6 +2666,7 @@ class AllyRemoveSelectView(View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.user_id
 
+
 class AllyRemoveSelectButton(discord.ui.Button):
     def __init__(self, alliance_id, name):
         super().__init__(label=f"Удалить {name}", style=discord.ButtonStyle.danger)
@@ -2636,6 +2675,7 @@ class AllyRemoveSelectButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         await self.view.cog.delete_alliance(self.alliance_id)
         await interaction.response.send_message("✅ Альянс удалён.", ephemeral=True)
+
 
 class AdminAllyDeleteView(View):
     def __init__(self, admin_id: int, alliances: list, bot):
@@ -2647,6 +2687,7 @@ class AdminAllyDeleteView(View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.admin_id
+
 
 class AdminAllyDeleteButton(discord.ui.Button):
     def __init__(self, alliance_id, name):
