@@ -1154,7 +1154,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         embed = await self.build_shop_embed(view)
         view.message = await ctx.send(embed=embed, view=view)
 
-        async def build_shop_embed(self, view: ShopView) -> discord.Embed:
+    async def build_shop_embed(self, view: "ShopView") -> discord.Embed:
         all_vehicles = await vehicles_col.find({"approved": True}).to_list(length=None)
         if view.filter_type == 'category':
             vehicles = [v for v in all_vehicles if v.get('category') == view.filter_value]
@@ -1187,6 +1187,8 @@ class Shop(commands.Cog, name="🛒 Магазин"):
                 desc = v['description'][:80] + ('...' if len(v['description']) > 80 else '')
                 embed.add_field(name=name, value=desc, inline=False)
         return embed
+
+    # ... остальные методы магазина (add_vehicle, submit_application, buy и т.д.) должны быть здесь же, с отступом 4 пробела (как build_shop_embed)
 
     @commands.command(name='modernization')
     @is_registered()
