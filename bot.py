@@ -2504,27 +2504,30 @@ class AllyCreateStartView(View):
         self.cog = cog
         self.user_id = user_id
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.user_id
+
     @button(label="Создать альянс", style=discord.ButtonStyle.primary)
     async def create_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(AllyCreateModal(self.cog, self.user_id))
+        modal = AllyCreateModal(self.cog, self.user_id, interaction.guild)
+        await interaction.response.send_modal(modal)
 
 class AllyCreateModal(Modal, title="Создание альянса"):
     name = TextInput(label="Название альянса", placeholder="Великий Союз", max_length=80)
     description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Могучий альянс...", max_length=500)
     ally_type = TextInput(label="Тип (Военный/Экономический/Военно-Экономический)", placeholder="Военный", max_length=30)
 
-    def __init__(self, cog: "Alliances", user_id: int):
+    def __init__(self, cog: "Alliances", user_id: int, guild: discord.Guild):
         super().__init__()
         self.cog = cog
         self.user_id = user_id
+        self.guild = guild
 
     async def on_submit(self, interaction: discord.Interaction):
         name = self.name.value.strip()
         desc = self.description.value.strip()
         atype = self.ally_type.value.strip()
 
-        # Создаем альянс в БД
-        guild = interaction.guild
         alliance_data = {
             'owner_id': str(self.user_id),
             'name': name,
@@ -2541,25 +2544,21 @@ class AllyCreateModal(Modal, title="Создание альянса"):
         result = await alliances_col.insert_one(alliance_data)
         alliance_data['_id'] = result.inserted_id
 
-        # Создаем ветку
-        channel = guild.get_channel(ALLIANCES_CHANNEL_ID)
+        channel = self.guild.get_channel(ALLIANCES_CHANNEL_ID)
         if channel:
             try:
-                # Создаем ветку только для администраторов и создателя
                 thread = await channel.create_thread(
                     name=f"🏛️ {name}",
                     auto_archive_duration=1440,
                     reason=f"Альянс {name}"
                 )
 
-                # Получаем администраторов и добавляем их + создателя
-                admin_role = discord.utils.get(guild.roles, permissions=discord.Permissions(administrator=True))
-                creator = guild.get_member(self.user_id)
-
+                creator = self.guild.get_member(self.user_id)
                 if creator:
                     await thread.add_user(creator)
 
                 await alliances_col.update_one({'_id': result.inserted_id}, {'$set': {'thread_id': thread.id}})
+                await update_user(self.user_id, {'alliance_id': result.inserted_id, 'alliance_role': 'owner'})
 
                 embed = discord.Embed(
                     title=f"✅ Альянс {name} создан!",
@@ -2567,9 +2566,6 @@ class AllyCreateModal(Modal, title="Создание альянса"):
                     color=discord.Color.green()
                 )
                 await interaction.response.send_message(embed=embed, ephemeral=True)
-
-                # Добавляем владельца в альянс
-                await update_user(self.user_id, {'alliance_id': result.inserted_id, 'alliance_role': 'owner'})
             except Exception as e:
                 await interaction.response.send_message(f"❌ Ошибка при создании ветки: {str(e)}", ephemeral=True)
         else:
