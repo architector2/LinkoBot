@@ -31,7 +31,7 @@ alliance_invites_col = db['alliance_invites']
 REGISTERED_ROLE_ID = 1501510805169115176
 UNREGISTERED_ROLE_ID = 1141339127367880764
 COUNTRY_ROLE_ID = 1141340397558321313
-ALLIANCES_CHANNEL_ID = 1502009375324110968
+ALLIANCES_CHANNEL_ID = 1501932162381906020
 
 # ===== НАСТРОЙКИ БОТА =====
 intents = discord.Intents.default()
@@ -311,6 +311,7 @@ USAGE_HINTS = {
     'ally-remove': '❌ Команда `!ally-remove` не требует аргументов.',
     'ally-delete': '❌ Команда `!ally-delete` не требует аргументов (админ).',
     'iso-ally': '❌ Использование: `!iso-ally <название альянса> <ссылка на изображение>`',
+    'edit-buy': '❌ Использование: `!edit-buy <название/часть названия> <новая стоимость>`\nПример: `!edit-buy Т-90 6000000`',
 }
 
 @bot.event
@@ -582,6 +583,18 @@ class Economy(commands.Cog, name="💰 Экономика"):
         message_id = match.group(2)
         if channel_id != "1363585142593032412":
             await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
+            return
+
+        # Проверяем, что сообщение принадлежит автору команды
+        try:
+            reform_channel = ctx.guild.get_channel(int(channel_id))
+            if reform_channel:
+                message = await reform_channel.fetch_message(int(message_id))
+                if message.author.id != ctx.author.id:
+                    await ctx.send("❌ Вы можете использовать только ссылки на свои сообщения!")
+                    return
+        except:
+            await ctx.send("❌ Не удалось проверить сообщение. Убедитесь, что ссылка корректна.")
             return
 
         existing = await reform_links_col.find_one({"message_id": message_id})
@@ -1133,6 +1146,49 @@ class Admin(commands.Cog, name="👑 Админ"):
             return
         view = AdminAllyDeleteView(ctx.author.id, alliances, self.bot)
         await ctx.send("Выберите альянс для удаления:", view=view)
+
+    @commands.command(name='edit-buy')
+    @commands.has_permissions(administrator=True)
+    async def edit_buy(self, ctx, *, args: str):
+        """Изменить стоимость предмета: !edit-buy <название/часть названия> <новая стоимость>"""
+        parts = args.rsplit(' ', 1)
+        if len(parts) < 2:
+            await ctx.send("❌ Использование: `!edit-buy <название/часть названия> <новая стоимость>`\nПример: `!edit-buy Т-90 6000000`")
+            return
+
+        name_or_part = parts[0].strip()
+        try:
+            new_price = int(parts[1].replace(',', '').replace(' ', ''))
+            if new_price <= 0:
+                raise ValueError
+        except ValueError:
+            await ctx.send("❌ Стоимость должна быть положительным целым числом.")
+            return
+
+        vehicle = await vehicles_col.find_one({"approved": True, "name": name_or_part.strip()})
+        if not vehicle:
+            regex = re.compile(re.escape(name_or_part.strip()), re.IGNORECASE)
+            matches = await vehicles_col.find({"approved": True, "name": {"$regex": regex}}).to_list(length=25)
+            if not matches:
+                await ctx.send("❌ Техника не найдена.")
+                return
+            if len(matches) > 1:
+                names = [v['name'] for v in matches]
+                await ctx.send(f"Найдено несколько совпадений: {', '.join(names)}. Уточните название.")
+                return
+            vehicle = matches[0]
+
+        old_price = vehicle['price']
+        await vehicles_col.update_one({'_id': vehicle['_id']}, {'$set': {'price': new_price}})
+
+        embed = discord.Embed(
+            title="💰 Стоимость изменена",
+            description=f"Техника: **{vehicle['name']}**",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Старая стоимость", value=f"{old_price:,} 💵", inline=True)
+        embed.add_field(name="Новая стоимость", value=f"{new_price:,} 💵", inline=True)
+        await ctx.send(embed=embed)
 
 # ===========================
 # 🛒 COG: МАГАЗИН
