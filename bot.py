@@ -1,3 +1,8 @@
+import logging
+
+# Suppress discord.py info logs in production
+logging.getLogger('discord.gateway').setLevel(logging.WARNING)
+logging.getLogger('discord.client').setLevel(logging.WARNING)
 import discord
 from discord.ext import commands
 from discord.ui import Select, View, Modal, TextInput, button
