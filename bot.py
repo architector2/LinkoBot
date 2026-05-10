@@ -261,7 +261,7 @@ def get_vehicle_maintenance_cost_per_hour(gdp: int) -> int:
     else:
         return 5_000_000
 
-SOLDIER_MAINTENANCE_PER_HOUR = 10_000
+SOLDIER_MAINTENANCE_PER_HOUR = 100
 
 # ===== СОБЫТИЯ =====
 @bot.event
