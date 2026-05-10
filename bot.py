@@ -3071,17 +3071,23 @@ class AdminAllyDeleteSelectView(View):
         return interaction.user.id == self.admin_id
 
     async def select_callback(self, interaction: discord.Interaction):
-        alliance_id = interaction.data['values'][0]
         try:
-            alliance_id = ObjectId(alliance_id)
-        except:
-            await interaction.response.send_message("❌ Ошибка при удалении альянса.", ephemeral=True)
-            return
-        
-        cog = interaction.client.get_cog('Alliances')
-        if cog:
-            await cog.delete_alliance(alliance_id)
-            await interaction.response.send_message("✅ Альянс удален.", ephemeral=True)
+            alliance_id = interaction.data['values'][0]
+            if isinstance(alliance_id, str):
+                alliance_id = ObjectId(alliance_id)
+            
+            cog = interaction.client.get_cog('Alliances')
+            if not cog:
+                await interaction.response.send_message("❌ Ошибка: Cog не найден.", ephemeral=True)
+                return
+            
+            result = await cog.delete_alliance(alliance_id)
+            if result:
+                await interaction.response.send_message("✅ Альянс удален.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Не удалось удалить альянс.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
 
 class AdminAllyDeleteButton(discord.ui.Button):
     def __init__(self, alliance_id, name):
@@ -3090,10 +3096,23 @@ class AdminAllyDeleteButton(discord.ui.Button):
         self.alliance_id = alliance_id
 
     async def callback(self, interaction: discord.Interaction):
-        cog = interaction.client.get_cog('Alliances')
-        if cog:
-            await cog.delete_alliance(self.alliance_id)
-            await interaction.response.send_message("✅ Альянс удален.", ephemeral=True)
+        try:
+            alliance_id = self.alliance_id
+            if isinstance(alliance_id, str):
+                alliance_id = ObjectId(alliance_id)
+            
+            cog = interaction.client.get_cog('Alliances')
+            if not cog:
+                await interaction.response.send_message("❌ Ошибка: Cog не найден.", ephemeral=True)
+                return
+            
+            result = await cog.delete_alliance(alliance_id)
+            if result:
+                await interaction.response.send_message("✅ Альянс удален.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Не удалось удалить альянс.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
 
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
