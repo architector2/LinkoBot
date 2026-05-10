@@ -1,8 +1,3 @@
-import logging
-
-# Suppress discord.py info logs in production
-logging.getLogger('discord.gateway').setLevel(logging.WARNING)
-logging.getLogger('discord.client').setLevel(logging.WARNING)
 import discord
 from discord.ext import commands
 from discord.ui import Select, View, Modal, TextInput, button
@@ -36,7 +31,8 @@ alliance_invites_col = db['alliance_invites']
 REGISTERED_ROLE_ID = 1501510805169115176
 UNREGISTERED_ROLE_ID = 1141339127367880764
 COUNTRY_ROLE_ID = 1141340397558321313
-ALLIANCES_CHANNEL_ID = 1501932162381906020
+ALLIANCES_THREADS_CHANNEL_ID = 1502968035235987487
+ALLIANCES_APPROVAL_CHANNEL_ID = 1502009375324110968
 
 # ===== НАСТРОЙКИ БОТА =====
 intents = discord.Intents.default()
@@ -1207,7 +1203,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         "ПВО",
         "Другое",
     ]
-    APPROVAL_CHANNEL = 1469319991550673061
+    APPROVAL_CHANNEL = 1502009375324110968
 
     def __init__(self, bot):
         self.bot = bot
@@ -2599,38 +2595,140 @@ class AllyCreateModal(Modal, title="Создание альянса"):
             'tax_percent': 2,
             'image_url': None,
             'thread_id': None,
+            'approved': False,
             'created_at': datetime.now().timestamp()
         }
 
         result = await alliances_col.insert_one(alliance_data)
         alliance_data['_id'] = result.inserted_id
 
-        channel = self.guild.get_channel(ALLIANCES_CHANNEL_ID)
-        if channel:
-            try:
-                thread = await channel.create_thread(
-                    name=f"🏛️ {name}",
+        # Отправляем заявку на одобрение
+        approval_channel = self.guild.get_channel(ALLIANCES_APPROVAL_CHANNEL_ID)
+        if approval_channel:
+            embed = discord.Embed(
+                title="📥 Новая заявка на создание альянса",
+                color=discord.Color.gold()
+            )
+            embed.add_field(name="Название", value=name, inline=False)
+            embed.add_field(name="Описание", value=desc, inline=False)
+            embed.add_field(name="Тип", value=atype, inline=True)
+            creator = self.guild.get_member(self.user_id)
+            creator_name = creator.name if creator else f"User{self.user_id}"
+            embed.add_field(name="Создатель", value=creator_name, inline=True)
+            embed.set_footer(text=f"ID альянса: {result.inserted_id}")
+            
+            view = AllyApprovalView(result.inserted_id, self.guild, self.user_id)
+            await approval_channel.send(embed=embed, view=view)
+            
+            await interaction.response.send_message("✅ Заявка на создание альянса отправлена на одобрение!", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Канал для заявок не найден.", ephemeral=True)
+
+class AllyApprovalView(View):
+    def __init__(self, alliance_id, guild: discord.Guild, creator_id: int):
+        super().__init__(timeout=None)
+        self.alliance_id = alliance_id
+        self.guild = guild
+        self.creator_id = creator_id
+
+    @button(label="Одобрить", style=discord.ButtonStyle.success)
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Только администраторы могут одобрять альянсы.", ephemeral=True)
+            return
+
+        alliance = await get_alliance(self.alliance_id)
+        if not alliance:
+            await interaction.response.send_message("❌ Альянс не найден.", ephemeral=True)
+            return
+
+        try:
+            # Создаем тред в канале для веток альянсов
+            thread_channel = self.guild.get_channel(ALLIANCES_THREADS_CHANNEL_ID)
+            if thread_channel:
+                thread = await thread_channel.create_thread(
+                    name=f"🏛️ {alliance['name']}",
                     auto_archive_duration=1440,
-                    reason=f"Альянс {name}"
+                    reason=f"Альянс {alliance['name']}"
                 )
 
-                creator = self.guild.get_member(self.user_id)
+                # Добавляем создателя в тред
+                creator = self.guild.get_member(self.creator_id)
                 if creator:
                     await thread.add_user(creator)
 
-                await alliances_col.update_one({'_id': result.inserted_id}, {'$set': {'thread_id': thread.id}})
-                await update_user(self.user_id, {'alliance_id': result.inserted_id, 'alliance_role': 'owner'})
-
-                embed = discord.Embed(
-                    title=f"✅ Альянс {name} создан!",
-                    description=f"Ветка: {thread.mention}",
-                    color=discord.Color.green()
+                # Обновляем альянс
+                await alliances_col.update_one(
+                    {'_id': self.alliance_id},
+                    {'$set': {'thread_id': thread.id, 'approved': True}}
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-            except Exception as e:
-                await interaction.response.send_message(f"❌ Ошибка при создании ветки: {str(e)}", ephemeral=True)
-        else:
-            await interaction.response.send_message("❌ Канал альянсов не найден.", ephemeral=True)
+
+                # Обновляем пользователя
+                await update_user(self.creator_id, {'alliance_id': self.alliance_id, 'alliance_role': 'owner'})
+
+                # Обновляем сообщение
+                embed = interaction.message.embeds[0]
+                embed.color = discord.Color.green()
+                embed.title = "✅ Альянс одобрен"
+                embed.set_footer(text=f"Одобрено: {interaction.user.name}")
+                await interaction.message.edit(embed=embed, view=None)
+
+                # Отправляем DM создателю
+                try:
+                    await creator.send(f"✅ Ваш альянс **{alliance['name']}** одобрен!\nВетка: {thread.mention}")
+                except:
+                    pass
+
+                await interaction.response.send_message("✅ Альянс одобрен и создана ветка.", ephemeral=True)
+            else:
+                await interaction.response.send_message("❌ Канал для веток не найден.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
+
+    @button(label="Отклонить", style=discord.ButtonStyle.danger)
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Только администраторы могут отклонять альянсы.", ephemeral=True)
+            return
+
+        modal = AllyRejectModal(self.alliance_id, self.guild, self.creator_id, interaction.message)
+        await interaction.response.send_modal(modal)
+
+class AllyRejectModal(Modal, title="Причина отклонения"):
+    reason = TextInput(label="Причина", style=discord.TextStyle.long, placeholder="Не соответствует критериям...", max_length=500)
+
+    def __init__(self, alliance_id, guild: discord.Guild, creator_id: int, message: discord.Message):
+        super().__init__()
+        self.alliance_id = alliance_id
+        self.guild = guild
+        self.creator_id = creator_id
+        self.message = message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        reason = self.reason.value.strip()
+
+        # Удаляем альянс
+        await alliances_col.delete_one({'_id': self.alliance_id})
+
+        # Обновляем сообщение
+        embed = self.message.embeds[0]
+        embed.color = discord.Color.red()
+        embed.title = "❌ Альянс отклонен"
+        embed.add_field(name="Причина", value=reason, inline=False)
+        embed.set_footer(text=f"Отклонено: {interaction.user.name}")
+        await self.message.edit(embed=embed, view=None)
+
+        # Отправляем DM создателю
+        creator = self.guild.get_member(self.creator_id)
+        if creator:
+            try:
+                alliance = await get_alliance(self.alliance_id)
+                if alliance:
+                    await creator.send(f"❌ Ваша заявка на альянс **{alliance['name']}** отклонена.\n**Причина:** {reason}")
+            except:
+                pass
+
+        await interaction.response.send_message("✅ Альянс отклонен.", ephemeral=True)
 
 class AllyInfoView(View):
     def __init__(self, cog: "Alliances", alliance: dict, user_id: int, is_owner: bool, bot):
