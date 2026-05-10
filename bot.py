@@ -3076,12 +3076,18 @@ class AdminAllyDeleteSelectView(View):
             if isinstance(alliance_id, str):
                 alliance_id = ObjectId(alliance_id)
             
-            cog = interaction.client.get_cog('Alliances')
-            if not cog:
+            # Получаем Alliances cog по названию класса
+            alliances_cog = None
+            for cog in interaction.client.cogs.values():
+                if cog.__class__.__name__ == 'Alliances':
+                    alliances_cog = cog
+                    break
+            
+            if not alliances_cog:
                 await interaction.response.send_message("❌ Ошибка: Cog не найден.", ephemeral=True)
                 return
             
-            result = await cog.delete_alliance(alliance_id)
+            result = await alliances_cog.delete_alliance(alliance_id)
             if result:
                 await interaction.response.send_message("✅ Альянс удален.", ephemeral=True)
             else:
@@ -3101,12 +3107,18 @@ class AdminAllyDeleteButton(discord.ui.Button):
             if isinstance(alliance_id, str):
                 alliance_id = ObjectId(alliance_id)
             
-            cog = interaction.client.get_cog('Alliances')
-            if not cog:
+            # Получаем Alliances cog по названию класса
+            alliances_cog = None
+            for cog in interaction.client.cogs.values():
+                if cog.__class__.__name__ == 'Alliances':
+                    alliances_cog = cog
+                    break
+            
+            if not alliances_cog:
                 await interaction.response.send_message("❌ Ошибка: Cog не найден.", ephemeral=True)
                 return
             
-            result = await cog.delete_alliance(alliance_id)
+            result = await alliances_cog.delete_alliance(alliance_id)
             if result:
                 await interaction.response.send_message("✅ Альянс удален.", ephemeral=True)
             else:
