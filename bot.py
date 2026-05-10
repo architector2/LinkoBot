@@ -6,6 +6,7 @@ import re
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import motor.motor_asyncio
+from bson import ObjectId
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -120,6 +121,11 @@ def is_registered():
 
 # ===== АЛЬЯНСЫ =====
 async def get_alliance(alliance_id) -> dict:
+    if isinstance(alliance_id, str):
+        try:
+            alliance_id = ObjectId(alliance_id)
+        except:
+            return None
     return await alliances_col.find_one({'_id': alliance_id})
 
 async def get_user_alliance(user_id: int) -> dict:
@@ -1893,6 +1899,13 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
         return embed
 
     async def delete_alliance(self, alliance_id):
+        # Конвертируем в ObjectId если это строка
+        if isinstance(alliance_id, str):
+            try:
+                alliance_id = ObjectId(alliance_id)
+            except:
+                return False
+        
         alliance = await get_alliance(alliance_id)
         if not alliance:
             return False
@@ -3059,6 +3072,12 @@ class AdminAllyDeleteSelectView(View):
 
     async def select_callback(self, interaction: discord.Interaction):
         alliance_id = interaction.data['values'][0]
+        try:
+            alliance_id = ObjectId(alliance_id)
+        except:
+            await interaction.response.send_message("❌ Ошибка при удалении альянса.", ephemeral=True)
+            return
+        
         cog = interaction.client.get_cog('Alliances')
         if cog:
             await cog.delete_alliance(alliance_id)
