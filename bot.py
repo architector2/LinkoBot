@@ -3066,7 +3066,8 @@ class AdminAllyDeleteSelectView(View):
 
 class AdminAllyDeleteButton(discord.ui.Button):
     def __init__(self, alliance_id, name):
-        super().__init__(label=f"Удалить {name}", style=discord.ButtonStyle.danger)
+        label = name[:76]  # Max 80 chars for label
+        super().__init__(label=f"❌ {label}", style=discord.ButtonStyle.danger)
         self.alliance_id = alliance_id
 
     async def callback(self, interaction: discord.Interaction):
