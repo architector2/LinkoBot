@@ -985,31 +985,33 @@ class Admin(commands.Cog, name="👑 Админ"):
             await member.remove_roles(country_role)
         await ctx.send(f"✅ Статистика игрока {member.mention} полностью сброшена, роли обновлены.")
 
-   @bot.command(name='delete-vehicle')
-@commands.has_permissions(administrator=True)
-async def delete_vehicle(ctx, *, name: str):
-    """Удалить технику (поиск по названию)"""
-    query = {"item_name": {"$regex": name, "$options": "i"}}
-    vehicles = await inventory_col.find(query).to_list(length=25)
+# Пример правильного отступа внутри класса (обычно 4 пробела)
+    @commands.command(name='delete-vehicle')
+    @commands.has_permissions(administrator=True)
+    async def delete_vehicle(self, ctx, *, name: str):
+        """Удалить технику (поиск по названию)"""
+        query = {"item_name": {"$regex": name, "$options": "i"}}
+        vehicles = await inventory_col.find(query).to_list(length=25)
 
-    if not vehicles:
-        return await ctx.send("❌ Техника не найдена.")
+        if not vehicles:
+            return await ctx.send("❌ Техника не найдена.")
 
-    if len(vehicles) == 1:
-        v_name = vehicles[0]['item_name']
-        await inventory_col.delete_one({'_id': vehicles[0]['_id']})
-        await ctx.send(f"✅ Техника **{v_name}** удалена.")
-    else:
-        # Используем наш новый класс DeletionView
-        view = DeletionView(vehicles, ctx.author.id)
-        await ctx.send("🔎 Найдено несколько вариантов, выбери нужный:", view=view)
+        if len(vehicles) == 1:
+            v_id = vehicles[0]['_id']
+            v_name = vehicles[0]['item_name']
+            await self.delete_vehicle_by_id(v_id, v_name)
+            await ctx.send(f"✅ Техника **{v_name}** удалена.")
+        else:
+            view = DeletionView(vehicles, ctx.author.id)
+            await ctx.send("🔎 Найдено несколько вариантов, выбери нужный:", view=view)
 
+    # Функция ниже должна быть на ТОМ ЖЕ уровне, что и функция выше
     async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
         await vehicles_col.delete_one({'_id': vehicle_id})
         await licenses_col.delete_many({'vehicle_name': name})
         await inventory_col.delete_many({'item_name': name})
         if interaction:
-            await interaction.response.send_message(f"✅ Техника **{name}** удалена из магазина.", ephemeral=True)
+            await interaction.response.send_message(f"✅ Техника **{name}** удалена.", ephemeral=True)
 
     @commands.command(name='invsee')
     @commands.has_permissions(administrator=True)
