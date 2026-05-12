@@ -587,39 +587,41 @@ class Economy(commands.Cog, name="💰 Экономика"):
         if amount is None or message_link is None:
             await ctx.send(USAGE_HINTS['reforms'])
             return
+            
         if amount <= 0:
             await ctx.send("❌ Сумма должна быть больше 0!")
             return
 
         pattern = r'^https://discord\.com/channels/(\d+)/(\d+)/(\d+)$'
-match = re.match(pattern, message_link.strip())
+        match = re.match(pattern, message_link.strip())
 
-if not match:
-    await ctx.send("❌ Неверный формат ссылки.")
-    return
+        if not match:
+            await ctx.send("❌ Неверный формат ссылки.")
+            return
 
-guild_id = match.group(1)
-channel_id = match.group(2)
-message_id = match.group(3)
+        guild_id = match.group(1)
+        channel_id = match.group(2)
+        message_id = match.group(3)
 
-# Verify guild
-if int(guild_id) != ctx.guild.id:
-    await ctx.send("❌ Ссылка должна быть с этого сервера.")
-    return
+        # Проверка сервера
+        if int(guild_id) != ctx.guild.id:
+            await ctx.send("❌ Ссылка должна быть с этого сервера.")
+            return
 
-# Verify channel
-if channel_id != "1363585142593032412":
-    await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
-    return
+        # Проверка канала
+        if channel_id != "1363585142593032412":
+            await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
+            return
 
-        # Проверяем, что сообщение принадлежит автору команды
+        try:
+            # Проверяем, что сообщение принадлежит автору команды
             reform_channel = ctx.guild.get_channel(int(channel_id))
             if reform_channel:
                 message = await reform_channel.fetch_message(int(message_id))
                 if message.author.id != ctx.author.id:
                     await ctx.send("❌ Вы можете использовать только ссылки на свои сообщения!")
                     return
-        except:
+        except Exception as e:
             await ctx.send("❌ Не удалось проверить сообщение. Убедитесь, что ссылка корректна.")
             return
 
