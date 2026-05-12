@@ -580,7 +580,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         await ctx.send(embed=embed)
 
-    @commands.command(name='reforms')
+       @commands.command(name='reforms')
     @is_registered()
     async def reforms(self, ctx, amount: int = None, *, message_link: str = None):
         """Вложить деньги в ВВП (требуется ссылка на сообщение из канала реформ)"""
@@ -592,27 +592,28 @@ class Economy(commands.Cog, name="💰 Экономика"):
             return
 
         pattern = r'^https://discord\.com/channels/(\d+)/(\d+)/(\d+)$'
-match = re.match(pattern, message_link.strip())
+        match = re.match(pattern, message_link.strip())
 
-if not match:
-    await ctx.send("❌ Неверный формат ссылки.")
-    return
+        if not match:
+            await ctx.send("❌ Неверный формат ссылки.")
+            return
 
-guild_id = match.group(1)
-channel_id = match.group(2)
-message_id = match.group(3)
+        guild_id = match.group(1)
+        channel_id = match.group(2)
+        message_id = match.group(3)
 
-# Verify guild
-if int(guild_id) != ctx.guild.id:
-    await ctx.send("❌ Ссылка должна быть с этого сервера.")
-    return
+        # Verify guild
+        if int(guild_id) != ctx.guild.id:
+            await ctx.send("❌ Ссылка должна быть с этого сервера.")
+            return
 
-# Verify channel
-if channel_id != "1363585142593032412":
-    await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
-    return
+        # Verify channel
+        if channel_id != "1363585142593032412":
+            await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
+            return
 
         # Проверяем, что сообщение принадлежит автору команды
+        try:
             reform_channel = ctx.guild.get_channel(int(channel_id))
             if reform_channel:
                 message = await reform_channel.fetch_message(int(message_id))
@@ -623,8 +624,10 @@ if channel_id != "1363585142593032412":
             await ctx.send("❌ Не удалось проверить сообщение. Убедитесь, что ссылка корректна.")
             return
 
-        existing = await reform_links_col.find_one({"message_id": message_id})
-        if existing:
+        # ... остальная часть команды ...
+
+existing = await reform_links_col.find_one({"message_id": message_id})
+if existing:
             await ctx.send("❌ Эта ссылка уже была использована для реформ. Пожалуйста, приложите новое сообщение.")
             return
 
