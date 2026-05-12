@@ -613,7 +613,6 @@ if channel_id != "1363585142593032412":
     return
 
         # Проверяем, что сообщение принадлежит автору команды
-        try:
             reform_channel = ctx.guild.get_channel(int(channel_id))
             if reform_channel:
                 message = await reform_channel.fetch_message(int(message_id))
