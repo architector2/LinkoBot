@@ -252,14 +252,8 @@ async def get_inventory(user_id: int) -> list:
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОБСЛУЖИВАНИЯ =====
 def get_vehicle_maintenance_cost_per_hour(gdp: int) -> int:
-    if gdp < 200_000_000_000:
-        return 500_000
-    elif gdp <= 500_000_000_000:
-        return 1_000_000
-    elif gdp <= 1_000_000_000_000:
-        return 2_500_000
-    else:
-        return 5_000_000
+    """Возвращает фиксированную стоимость содержания одной единицы техники"""
+    return 5_000_000
 
 SOLDIER_MAINTENANCE_PER_HOUR = 100
 
