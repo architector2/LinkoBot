@@ -139,58 +139,37 @@ async def count_user_alliances_as_owner(user_id: int) -> int:
     return count
 
 # ===== ЛИМИТЫ ЗАЯВОК =====
+# ===== ЛИМИТЫ ЗАЯВОК (ОБНОВЛЕНО: БЕЗ ЛИМИТА, КД 4 ЧАСА) =====
 async def check_daily_submission_limit(user_id: int) -> tuple:
-    today = datetime.now().strftime('%Y-%m-%d')
     doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
-    if not doc or doc.get('date_str') != today:
-        await daily_submissions_col.update_one(
-            {'user_id': str(user_id)},
-            {'$set': {'date_str': today, 'count': 5, 'first_submission_time': 0, 'last_submission_time': 0}},
-            upsert=True
-        )
+    if not doc:
         return True, ''
-    if doc['count'] <= 0:
-        t0 = doc.get('first_submission_time', 0)
-        if t0:
-            reset_at = datetime.fromtimestamp(t0) + timedelta(hours=24)
-            remaining = reset_at - datetime.now()
-            if remaining.total_seconds() > 0:
-                hours, rem = divmod(remaining.seconds, 3600)
-                mins = rem // 60
-                return False, f"❌ Лимит заявок исчерпан. Сброс через {hours}ч {mins}мин."
-        return False, "❌ Лимит заявок исчерпан."
+    
     last_time = doc.get('last_submission_time', 0)
     if last_time:
         elapsed = datetime.now().timestamp() - last_time
-        if elapsed < 3600:
-            remaining = int(3600 - elapsed)
-            mins = remaining // 60
-            secs = remaining % 60
-            return False, f"⏰ Кулдаун! Подождите ещё {mins}м {secs}с перед следующей заявкой."
+        cooldown_period = 4 * 3600  # 4 часа в секундах
+        
+        if elapsed < cooldown_period:
+            remaining = int(cooldown_period - elapsed)
+            hours, rem = divmod(remaining, 3600)
+            mins = rem // 60
+            secs = rem % 60
+            return False, f"⏰ Кулдаун! Подождите ещё **{hours}ч {mins}м {secs}с** перед следующей заявкой."
+            
     return True, ''
 
 async def record_submission(user_id: int):
-    today = datetime.now().strftime('%Y-%m-%d')
-    doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
-    if not doc or doc.get('date_str') != today:
-        await daily_submissions_col.update_one(
-            {'user_id': str(user_id)},
-            {'$set': {'date_str': today, 'count': 4, 'first_submission_time': datetime.now().timestamp(), 'last_submission_time': datetime.now().timestamp()}},
-            upsert=True
-        )
-    else:
-        new_count = max(doc['count'] - 1, 0)
-        update = {'count': new_count, 'last_submission_time': datetime.now().timestamp()}
-        if doc.get('first_submission_time', 0) == 0:
-            update['first_submission_time'] = datetime.now().timestamp()
-        await daily_submissions_col.update_one({'user_id': str(user_id)}, {'$set': update})
+    # Теперь мы только обновляем время последней заявки, игнорируя счетчик 'count'
+    await daily_submissions_col.update_one(
+        {'user_id': str(user_id)},
+        {'$set': {'last_submission_time': datetime.now().timestamp()}},
+        upsert=True
+    )
 
 async def get_daily_submission_info(user_id: int) -> str:
-    today = datetime.now().strftime('%Y-%m-%d')
-    doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
-    if not doc or doc.get('date_str') != today:
-        return "5/5"
-    return f"{doc['count']}/5"
+    # Так как лимита больше нет, возвращаем бесконечность или статус "Доступно"
+    return "∞"
 
 # ===== ВЫЧИСЛЕНИЕ НЕДОВОЛЬСТВА =====
 def calculate_unhappiness_speed(user: dict) -> float:
