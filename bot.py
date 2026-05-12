@@ -951,28 +951,27 @@ class Admin(commands.Cog, name="👑 Админ"):
             await member.remove_roles(country_role)
         await ctx.send(f"✅ Статистика игрока {member.mention} полностью сброшена, роли обновлены.")
 
-    @commands.command(name='delete-vehicle', aliases=['del-vehicle'])
-    @commands.has_permissions(administrator=True)
-    async def delete_vehicle(self, ctx, *, name_or_part: str):
-        """Удалить технику из магазина (по названию или его части)"""
-        vehicles = await vehicles_col.find({"approved": True}).to_list(length=None)
-        if not vehicles:
-            await ctx.send("В магазине нет техники.")
-            return
-        matches = [v for v in vehicles if name_or_part.lower() in v['name'].lower()]
-        if not matches:
-            await ctx.send("Техника с таким названием не найдена.")
-            return
-        if len(matches) == 1:
-            v = matches[0]
-            confirm_view = ConfirmView(ctx.author.id, v['_id'], v['name'], self)
-            await ctx.send(f"Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
-        else:
-            options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
-            select = Select(placeholder="Выберите технику для удаления...", options=options)
-            view = DeleteSelectView(ctx.author.id, matches, select)
-            await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
+   @bot.command(name='delete-vehicle')
+@commands.has_permissions(administrator=True) # Обычно это админская команда
+async def delete_vehicle(self, ctx, *, search_name: str):
+    """Удалить технику игрока (поиск по названию)"""
+    # Ищем все совпадения в инвентаре игрока (или вообще в базе)
+    # Для примера ищем в инвентаре автора
+    query = {"item_name": {"$regex": search_name, "$options": "i"}}
+    vehicles = await inventory_col.find(query).to_list(length=25)
 
+    if not vehicles:
+        return await ctx.send("❌ Техника с таким названием не найдена.")
+
+    if len(vehicles) == 1:
+        # Если нашли только одну — удаляем сразу
+        name = vehicles[0]['item_name']
+        await inventory_col.delete_one({'_id': vehicles[0]['_id']})
+        await ctx.send(f"✅ Техника **{name}** удалена.")
+    else:
+        # Если нашли несколько — выводим меню выбора
+        view = VehicleDeleteView(vehicles, ctx.author.id)
+        await ctx.send("🔎 Найдено несколько вариантов. Выбери нужный:", view=view)
     async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
         await vehicles_col.delete_one({'_id': vehicle_id})
         await licenses_col.delete_many({'vehicle_name': name})
