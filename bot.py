@@ -270,15 +270,7 @@ async def get_inventory(user_id: int) -> list:
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОБСЛУЖИВАНИЯ =====
 def get_vehicle_maintenance_cost_per_hour(gdp: int) -> int:
-    if gdp < 200_000_000_000:
-        return 500_000
-    elif gdp <= 500_000_000_000:
-        return 1_000_000
-    elif gdp <= 1_000_000_000_000:
-        return 2_500_000
-    else:
-        return 5_000_000
-
+    return 5_000_000
 SOLDIER_MAINTENANCE_PER_HOUR = 100
 
 # ===== СОБЫТИЯ =====
@@ -599,16 +591,26 @@ class Economy(commands.Cog, name="💰 Экономика"):
             await ctx.send("❌ Сумма должна быть больше 0!")
             return
 
-        pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
-        match = re.match(pattern, message_link)
-        if not match:
-            await ctx.send("❌ Неверный формат ссылки. Ожидается ссылка на сообщение Discord.")
-            return
-        channel_id = match.group(1)
-        message_id = match.group(2)
-        if channel_id != "1363585142593032412":
-            await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
-            return
+        pattern = r'^https://discord\.com/channels/(\d+)/(\d+)/(\d+)$'
+match = re.match(pattern, message_link.strip())
+
+if not match:
+    await ctx.send("❌ Неверный формат ссылки.")
+    return
+
+guild_id = match.group(1)
+channel_id = match.group(2)
+message_id = match.group(3)
+
+# Verify guild
+if int(guild_id) != ctx.guild.id:
+    await ctx.send("❌ Ссылка должна быть с этого сервера.")
+    return
+
+# Verify channel
+if channel_id != "1363585142593032412":
+    await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
+    return
 
         # Проверяем, что сообщение принадлежит автору команды
         try:
@@ -1294,10 +1296,11 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
             return
 
-        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
+        can_submit, msg = await check_and_record_submission_atomic(ctx.author.id)
         if not can_submit:
-            await ctx.send(msg)
-            return
+    await ctx.send(msg)
+    return
+# Submission is automatically recorded in the atomic operation!
 
         info = await get_daily_submission_info(ctx.author.id)
         view = StartAddView(self, ctx.author.id, info)
