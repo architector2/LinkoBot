@@ -416,7 +416,169 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='collect', aliases=['coll'])
     @is_registered()
     async def collect(self, ctx):
-        # ... (your existing collect code, unchanged, keep inside properly)
+            """Собрать доход и прирост населения (с учётом содержания и баффов/дебаффов)"""
+        user = await get_user(ctx.author.id)
+    if user['gdp'] == 0:
+            await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
+            return
+
+        current_time = datetime.now().timestamp()
+    last_collect = user.get('last_collect', 0)
+    hours_passed = (current_time - last_collect) / 3600
+    hours_passed = min(hours_passed, 12)
+
+        if hours_passed < 1:
+            remaining_mins = int((1 - hours_passed) * 60)
+            await ctx.send(f"⏰ Подожди ещё **{remaining_mins}** мин. перед следующим коллектом!")
+            return
+
+        income_per_hour = user['gdp'] / 48
+        gross_income = int(income_per_hour * hours_passed)
+
+        # Применяем баффы/дебаффы
+        buffs = await buffs_col.find({'user_id': str(ctx.author.id)}).to_list(length=100)
+        total_buff_percent = 0
+        for b in buffs:
+            if b['type'] == 'buff':
+                total_buff_percent += b['percent']
+            else:  # debuff
+                total_buff_percent -= b['percent']
+        if total_buff_percent != 0:
+            gross_income = int(gross_income * (1 + total_buff_percent / 100))
+
+        # Бюджетные вычеты
+        budget_social = user.get('budget_social', DEFAULT_BUDGETS['budget_social'])
+        budget_education = user.get('budget_education', DEFAULT_BUDGETS['budget_education'])
+        budget_healthcare = user.get('budget_healthcare', DEFAULT_BUDGETS['budget_healthcare'])
+        budget_other = DEFAULT_BUDGETS['budget_other']
+
+        deduct_social = int(gross_income * budget_social / 100)
+        deduct_education = int(gross_income * budget_education / 100)
+        deduct_healthcare = int(gross_income * budget_healthcare / 100)
+        deduct_other = int(gross_income * budget_other / 100)
+        total_budget_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
+
+        # Содержание техники и солдат
+        inventory = await get_inventory(ctx.author.id)
+        vehicle_cost_per_hour = get_vehicle_maintenance_cost_per_hour(user['gdp'])
+        total_vehicle_maintenance = 0
+        total_soldier_maintenance = 0
+        total_units = 0
+        total_soldiers = 0
+
+        for item in inventory:
+            name = item['item_name']
+            qty = item['quantity']
+            if name == "Обученный Солдат":
+                total_soldiers += qty
+                total_soldier_maintenance += qty * SOLDIER_MAINTENANCE_PER_HOUR
+            else:
+                total_units += qty
+                total_vehicle_maintenance += qty * vehicle_cost_per_hour
+
+        vehicle_cost = int(total_vehicle_maintenance * hours_passed)
+        soldier_cost = int(total_soldier_maintenance * hours_passed)
+
+        # ===== НАЛОГ АЛЬЯНСА =====
+        alliance_tax = 0
+        alliance = await get_user_alliance(ctx.author.id)
+        if alliance:
+            alliance_tax_percent = alliance.get('tax_percent', 2)
+            alliance_tax = int(gross_income * alliance_tax_percent / 100)
+            # Добавляем в казну альянса
+            await alliances_col.update_one(
+                {'_id': alliance['_id']},
+                {'$inc': {'treasury': alliance_tax}}
+            )
+
+        net_income = gross_income - total_budget_deduct - vehicle_cost - soldier_cost - alliance_tax
+        new_balance = user['balance'] + net_income
+
+        # Прирост населения
+        population = user.get('population', 0)
+        pop_gained = 0
+        new_population = population
+        if population > 0:
+            last_pop_update = user.get('last_pop_update', 0)
+            if last_pop_update == 0:
+                last_pop_update = current_time
+            yearly_pct = user.get('pop_growth_yearly', 2.0)
+            hourly_pct = yearly_pct / 48.0
+            hours_since_pop = (current_time - last_pop_update) / 3600
+            if hours_since_pop > 0:
+                growth_multiplier = (1 + hourly_pct / 100) ** hours_since_pop
+                new_population = int(population * growth_multiplier)
+                pop_gained = new_population - population
+                if pop_gained > 0:
+                    population = new_population
+
+        update_data = {
+            'balance': new_balance,
+            'last_collect': current_time,
+        }
+        if pop_gained > 0:
+            update_data['population'] = new_population
+            update_data['last_pop_update'] = current_time
+        elif population > 0 and user.get('last_pop_update', 0) == 0:
+            update_data['last_pop_update'] = current_time
+
+        await update_user(ctx.author.id, update_data)
+
+        embed = discord.Embed(
+            title="💵 Коллект",
+            description=f"Ты собрал доход за **{hours_passed:.1f}** ч.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="ВВП", value=f"{user['gdp']:,} 💵", inline=True)
+        embed.add_field(name="Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
+        embed.add_field(name="Валовый доход", value=f"{gross_income:,} 💵", inline=False)
+
+        if total_buff_percent != 0:
+            embed.add_field(name="🔥 Баффы/Дебаффы", value=f"{'+' if total_buff_percent > 0 else ''}{total_buff_percent}%", inline=False)
+
+        embed.add_field(
+            name="Вычеты бюджета",
+            value=(
+                f"🏛️ Социальные расходы ({budget_social}%): -{deduct_social:,} 💵\n"
+                f"📚 Образование ({budget_education}%): -{deduct_education:,} 💵\n"
+                f"🏥 Здравоохранение ({budget_healthcare}%): -{deduct_healthcare:,} 💵\n"
+                f"📋 Иные расходы ({budget_other}%): -{deduct_other:,} 💵\n"
+                f"**Всего вычетов: -{total_budget_deduct:,} 💵**"
+            ),
+            inline=False
+        )
+
+        if vehicle_cost > 0:
+            embed.add_field(
+                name="🛠️ Содержание техники",
+                value=f"Кол-во единиц: {total_units:,}\nРасход: -{vehicle_cost:,} 💵",
+                inline=False
+            )
+        if soldier_cost > 0:
+            embed.add_field(
+                name="🪖 Содержание солдат",
+                value=f"Кол-во солдат: {total_soldiers:,}\nРасход: -{soldier_cost:,} 💵",
+                inline=False
+            )
+
+        if alliance_tax > 0:
+            embed.add_field(
+                name="🏛️ Налог альянса",
+                value=f"Налог {alliance.get('tax_percent', 2)}%: -{alliance_tax:,} 💵",
+                inline=False
+            )
+
+        embed.add_field(name="📌 Чистая прибыль", value=f"+{net_income:,} 💵", inline=False)
+        embed.add_field(name="💰 Новый баланс", value=f"{new_balance:,} 💵", inline=False)
+
+        if population > 0:
+            if pop_gained > 0:
+                embed.add_field(name="👥 Прирост населения", value=f"+{pop_gained:,} чел.", inline=True)
+            else:
+                embed.add_field(name="👥 Прирост населения", value="0 чел. (слишком мало времени)", inline=True)
+            embed.add_field(name="🌍 Новое население", value=f"{new_population:,} чел.", inline=False)
+
+        await ctx.send(embed=embed)
 
     @commands.command(name='reforms')
     @is_registered()
@@ -430,28 +592,27 @@ class Economy(commands.Cog, name="💰 Экономика"):
             return
 
         pattern = r'^https://discord\.com/channels/(\d+)/(\d+)/(\d+)$'
-        match = re.match(pattern, message_link.strip())
+match = re.match(pattern, message_link.strip())
 
-        if not match:
-            await ctx.send("❌ Неверный формат ссылки.")
-            return
+if not match:
+    await ctx.send("❌ Неверный формат ссылки.")
+    return
 
-        guild_id = match.group(1)
-        channel_id = match.group(2)
-        message_id = match.group(3)
+guild_id = match.group(1)
+channel_id = match.group(2)
+message_id = match.group(3)
 
-        # Verify guild
-        if int(guild_id) != ctx.guild.id:
-            await ctx.send("❌ Ссылка должна быть с этого сервера.")
-            return
+# Verify guild
+if int(guild_id) != ctx.guild.id:
+    await ctx.send("❌ Ссылка должна быть с этого сервера.")
+    return
 
-        # Verify channel
-        if channel_id != "1363585142593032412":
-            await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
-            return
+# Verify channel
+if channel_id != "1363585142593032412":
+    await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
+    return
 
         # Проверяем, что сообщение принадлежит автору команды
-        try:
             reform_channel = ctx.guild.get_channel(int(channel_id))
             if reform_channel:
                 message = await reform_channel.fetch_message(int(message_id))
@@ -464,81 +625,6 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         existing = await reform_links_col.find_one({"message_id": message_id})
         if existing:
-            await ctx.send("❌ Эта ссылка уже была использована для реформ. Пожалуйста, приложите новое сообщение.")
-            return
-
-        user = await get_user(ctx.author.id)
-        if user['gdp'] == 0:
-            await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
-            return
-
-        max_investment = user['gdp'] * 2
-        if amount > max_investment:
-            await ctx.send(f"❌ Максимальная инвестиция: **{max_investment:,}** 💵 (x2 от ВВП)")
-            return
-
-        if user['balance'] < amount:
-            await ctx.send(f"❌ Недостаточно денег! Баланс: {user['balance']:,} 💵")
-            return
-
-        gdp = user['gdp']
-        if gdp < 300_000_000_000:
-            efficiency = 0.50; tier = "50%"
-        elif gdp <= 500_000_000_000:
-            efficiency = 0.40; tier = "40%"
-        elif gdp <= 900_000_000_000:
-            efficiency = 0.30; tier = "30%"
-        elif gdp <= 2_800_000_000_000:
-            efficiency = 0.15; tier = "15%"
-        else:
-            efficiency = 0.10; tier = "10%"
-
-        gdp_gain = int(amount * efficiency)
-        new_gdp = user['gdp'] + gdp_gain
-        new_balance = user['balance'] - amount
-
-        await reform_links_col.insert_one({
-            "message_id": message_id,
-            "channel_id": channel_id,
-            "used_by": str(ctx.author.id),
-            "used_at": datetime.now().timestamp()
-        })
-
-        await update_user(ctx.author.id, {
-            'gdp': new_gdp,
-            'balance': new_balance
-        })
-
-        embed = discord.Embed(
-            title="🏗️ Реформы",
-            description=f"{ctx.author.mention} вложил **{amount:,}** 💵 в ВВП\nПричина: [Ссылка]({message_link})",
-            color=discord.Color.blue()
-        )
-        embed.add_field(name="Эффективность", value=f"{tier} от вложения", inline=False)
-        embed.add_field(name="Прирост ВВП", value=f"+{gdp_gain:,} 💵", inline=True)
-        embed.add_field(name="Старый ВВП", value=f"{user['gdp']:,} 💵", inline=True)
-        embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=True)
-        embed.add_field(name="Баланс", value=f"{new_balance:,} 💵", inline=False)
-        await ctx.send(embed=embed)
-
-    @commands.command(name='pay')
-    @is_registered()
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def pay(self, ctx, member: discord.Member, amount: int):
-        # ... (existing pay code)
-
-    @commands.command(name='top')
-    @is_registered()
-    async def top(self, ctx):
-        # ... (existing top code)
-
-    @commands.command(name='cab')
-    @is_registered()
-    async def cab(self, ctx, member: discord.Member = None):
-        # ... (existing cab code)
-
-existing = await reform_links_col.find_one({"message_id": message_id})
-if existing:
             await ctx.send("❌ Эта ссылка уже была использована для реформ. Пожалуйста, приложите новое сообщение.")
             return
 
