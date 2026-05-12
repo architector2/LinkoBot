@@ -139,69 +139,51 @@ async def count_user_alliances_as_owner(user_id: int) -> int:
     return count
 
 # ===== ЛИМИТЫ ЗАЯВОК =====
-async def check_and_record_submission_atomic(user_id: int) -> tuple:
-    """
-    Atomically check and record submission in ONE database operation.
-    This prevents race conditions where multiple requests bypass limits.
-    """
+async def check_daily_submission_limit(user_id: int) -> tuple:
     today = datetime.now().strftime('%Y-%m-%d')
-    current_time = datetime.now().timestamp()
-    
-    # Find or create entry and check limits ATOMICALLY
-    doc = await daily_submissions_col.find_one({
-        'user_id': str(user_id), 
-        'date_str': today
-    })
-    
-    # Initialize if needed
-    if not doc:
-        await daily_submissions_col.insert_one({
-            'user_id': str(user_id),
-            'date_str': today,
-            'count': 5,
-            'first_submission_time': 0,
-            'last_submission_time': 0
-        })
-        doc = await daily_submissions_col.find_one({
-            'user_id': str(user_id),
-            'date_str': today
-        })
-    
-    # Check count limit
+    doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
+    if not doc or doc.get('date_str') != today:
+        await daily_submissions_col.update_one(
+            {'user_id': str(user_id)},
+            {'$set': {'date_str': today, 'count': 5, 'first_submission_time': 0, 'last_submission_time': 0}},
+            upsert=True
+        )
+        return True, ''
     if doc['count'] <= 0:
         t0 = doc.get('first_submission_time', 0)
         if t0:
             reset_at = datetime.fromtimestamp(t0) + timedelta(hours=24)
             remaining = reset_at - datetime.now()
             if remaining.total_seconds() > 0:
-                hours = int(remaining.total_seconds() // 3600)
-                mins = int((remaining.total_seconds() % 3600) // 60)
+                hours, rem = divmod(remaining.seconds, 3600)
+                mins = rem // 60
                 return False, f"❌ Лимит заявок исчерпан. Сброс через {hours}ч {mins}мин."
         return False, "❌ Лимит заявок исчерпан."
-    
-    # Check cooldown
     last_time = doc.get('last_submission_time', 0)
-    if last_time and last_time > 0:
-        elapsed = current_time - last_time
+    if last_time:
+        elapsed = datetime.now().timestamp() - last_time
         if elapsed < 3600:
             remaining = int(3600 - elapsed)
             mins = remaining // 60
             secs = remaining % 60
-            return False, f"⏰ Кулдаун! Подождите ещё {mins}м {secs}с."
-    
-    # NOW record submission (only execute if checks passed)
-    await daily_submissions_col.update_one(
-        {'user_id': str(user_id), 'date_str': today},
-        {
-            '$inc': {'count': -1},
-            '$set': {
-                'last_submission_time': current_time,
-                'first_submission_time': doc.get('first_submission_time') or current_time
-            }
-        }
-    )
-    
+            return False, f"⏰ Кулдаун! Подождите ещё {mins}м {secs}с перед следующей заявкой."
     return True, ''
+
+async def record_submission(user_id: int):
+    today = datetime.now().strftime('%Y-%m-%d')
+    doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
+    if not doc or doc.get('date_str') != today:
+        await daily_submissions_col.update_one(
+            {'user_id': str(user_id)},
+            {'$set': {'date_str': today, 'count': 4, 'first_submission_time': datetime.now().timestamp(), 'last_submission_time': datetime.now().timestamp()}},
+            upsert=True
+        )
+    else:
+        new_count = max(doc['count'] - 1, 0)
+        update = {'count': new_count, 'last_submission_time': datetime.now().timestamp()}
+        if doc.get('first_submission_time', 0) == 0:
+            update['first_submission_time'] = datetime.now().timestamp()
+        await daily_submissions_col.update_one({'user_id': str(user_id)}, {'$set': update})
 
 async def get_daily_submission_info(user_id: int) -> str:
     today = datetime.now().strftime('%Y-%m-%d')
@@ -270,7 +252,15 @@ async def get_inventory(user_id: int) -> list:
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОБСЛУЖИВАНИЯ =====
 def get_vehicle_maintenance_cost_per_hour(gdp: int) -> int:
-    return 5_000_000
+    if gdp < 200_000_000_000:
+        return 500_000
+    elif gdp <= 500_000_000_000:
+        return 1_000_000
+    elif gdp <= 1_000_000_000_000:
+        return 2_500_000
+    else:
+        return 5_000_000
+
 SOLDIER_MAINTENANCE_PER_HOUR = 100
 
 # ===== СОБЫТИЯ =====
@@ -416,7 +406,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
     @commands.command(name='collect', aliases=['coll'])
     @is_registered()
     async def collect(self, ctx):
-        """Собрать доход и прирост населения"""
+        """Собрать доход и прирост населения (с учётом содержания и баффов/дебаффов)"""
         user = await get_user(ctx.author.id)
         if user['gdp'] == 0:
             await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
@@ -441,9 +431,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
         for b in buffs:
             if b['type'] == 'buff':
                 total_buff_percent += b['percent']
-            else:
+            else:  # debuff
                 total_buff_percent -= b['percent']
-        
         if total_buff_percent != 0:
             gross_income = int(gross_income * (1 + total_buff_percent / 100))
 
@@ -457,10 +446,9 @@ class Economy(commands.Cog, name="💰 Экономика"):
         deduct_education = int(gross_income * budget_education / 100)
         deduct_healthcare = int(gross_income * budget_healthcare / 100)
         deduct_other = int(gross_income * budget_other / 100)
-        
         total_budget_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
 
-        # Содержание
+        # Содержание техники и солдат
         inventory = await get_inventory(ctx.author.id)
         vehicle_cost_per_hour = get_vehicle_maintenance_cost_per_hour(user['gdp'])
         total_vehicle_maintenance = 0
@@ -481,12 +469,13 @@ class Economy(commands.Cog, name="💰 Экономика"):
         vehicle_cost = int(total_vehicle_maintenance * hours_passed)
         soldier_cost = int(total_soldier_maintenance * hours_passed)
 
-        # Налог альянса
+        # ===== НАЛОГ АЛЬЯНСА =====
         alliance_tax = 0
         alliance = await get_user_alliance(ctx.author.id)
         if alliance:
             alliance_tax_percent = alliance.get('tax_percent', 2)
             alliance_tax = int(gross_income * alliance_tax_percent / 100)
+            # Добавляем в казну альянса
             await alliances_col.update_one(
                 {'_id': alliance['_id']},
                 {'$inc': {'treasury': alliance_tax}}
@@ -501,7 +490,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
         new_population = population
         if population > 0:
             last_pop_update = user.get('last_pop_update', 0)
-            if last_pop_update == 0: last_pop_update = current_time
+            if last_pop_update == 0:
+                last_pop_update = current_time
             yearly_pct = user.get('pop_growth_yearly', 2.0)
             hourly_pct = yearly_pct / 48.0
             hours_since_pop = (current_time - last_pop_update) / 3600
@@ -509,6 +499,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 growth_multiplier = (1 + hourly_pct / 100) ** hours_since_pop
                 new_population = int(population * growth_multiplier)
                 pop_gained = new_population - population
+                if pop_gained > 0:
+                    population = new_population
 
         update_data = {
             'balance': new_balance,
@@ -517,85 +509,158 @@ class Economy(commands.Cog, name="💰 Экономика"):
         if pop_gained > 0:
             update_data['population'] = new_population
             update_data['last_pop_update'] = current_time
+        elif population > 0 and user.get('last_pop_update', 0) == 0:
+            update_data['last_pop_update'] = current_time
 
         await update_user(ctx.author.id, update_data)
 
-        embed = discord.Embed(title="💵 Коллект", color=discord.Color.green())
-        embed.add_field(name="Чистая прибыль", value=f"+{net_income:,} 💵", inline=False)
-        embed.add_field(name="Новый баланс", value=f"{new_balance:,} 💵", inline=False)
-        if pop_gained > 0:
-            embed.add_field(name="👥 Прирост населения", value=f"+{pop_gained:,} чел.", inline=True)
-        
+        embed = discord.Embed(
+            title="💵 Коллект",
+            description=f"Ты собрал доход за **{hours_passed:.1f}** ч.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="ВВП", value=f"{user['gdp']:,} 💵", inline=True)
+        embed.add_field(name="Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
+        embed.add_field(name="Валовый доход", value=f"{gross_income:,} 💵", inline=False)
+
+        if total_buff_percent != 0:
+            embed.add_field(name="🔥 Баффы/Дебаффы", value=f"{'+' if total_buff_percent > 0 else ''}{total_buff_percent}%", inline=False)
+
+        embed.add_field(
+            name="Вычеты бюджета",
+            value=(
+                f"🏛️ Социальные расходы ({budget_social}%): -{deduct_social:,} 💵\n"
+                f"📚 Образование ({budget_education}%): -{deduct_education:,} 💵\n"
+                f"🏥 Здравоохранение ({budget_healthcare}%): -{deduct_healthcare:,} 💵\n"
+                f"📋 Иные расходы ({budget_other}%): -{deduct_other:,} 💵\n"
+                f"**Всего вычетов: -{total_budget_deduct:,} 💵**"
+            ),
+            inline=False
+        )
+
+        if vehicle_cost > 0:
+            embed.add_field(
+                name="🛠️ Содержание техники",
+                value=f"Кол-во единиц: {total_units:,}\nРасход: -{vehicle_cost:,} 💵",
+                inline=False
+            )
+        if soldier_cost > 0:
+            embed.add_field(
+                name="🪖 Содержание солдат",
+                value=f"Кол-во солдат: {total_soldiers:,}\nРасход: -{soldier_cost:,} 💵",
+                inline=False
+            )
+
+        if alliance_tax > 0:
+            embed.add_field(
+                name="🏛️ Налог альянса",
+                value=f"Налог {alliance.get('tax_percent', 2)}%: -{alliance_tax:,} 💵",
+                inline=False
+            )
+
+        embed.add_field(name="📌 Чистая прибыль", value=f"+{net_income:,} 💵", inline=False)
+        embed.add_field(name="💰 Новый баланс", value=f"{new_balance:,} 💵", inline=False)
+
+        if population > 0:
+            if pop_gained > 0:
+                embed.add_field(name="👥 Прирост населения", value=f"+{pop_gained:,} чел.", inline=True)
+            else:
+                embed.add_field(name="👥 Прирост населения", value="0 чел. (слишком мало времени)", inline=True)
+            embed.add_field(name="🌍 Новое население", value=f"{new_population:,} чел.", inline=False)
+
         await ctx.send(embed=embed)
 
     @commands.command(name='reforms')
     @is_registered()
     async def reforms(self, ctx, amount: int = None, *, message_link: str = None):
-        """Вложить деньги в ВВП"""
+        """Вложить деньги в ВВП (требуется ссылка на сообщение из канала реформ)"""
         if amount is None or message_link is None:
             await ctx.send(USAGE_HINTS['reforms'])
             return
-
         if amount <= 0:
             await ctx.send("❌ Сумма должна быть больше 0!")
             return
 
-        pattern = r'^https://discord\.com/channels/(\d+)/(\d+)/(\d+)$'
-        match = re.match(pattern, message_link.strip())
+        pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
+        match = re.match(pattern, message_link)
         if not match:
-            await ctx.send("❌ Неверный формат ссылки.")
+            await ctx.send("❌ Неверный формат ссылки. Ожидается ссылка на сообщение Discord.")
             return
-
-        channel_id = match.group(2)
-        message_id = match.group(3)
-
+        channel_id = match.group(1)
+        message_id = match.group(2)
         if channel_id != "1363585142593032412":
-            await ctx.send("❌ Ссылка должна быть из канала реформ.")
+            await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
             return
 
+        # Проверяем, что сообщение принадлежит автору команды
         try:
             reform_channel = ctx.guild.get_channel(int(channel_id))
-            msg = await reform_channel.fetch_message(int(message_id))
-            if msg.author.id != ctx.author.id:
-                await ctx.send("❌ Нужна ссылка на ВАШЕ сообщение.")
-                return
+            if reform_channel:
+                message = await reform_channel.fetch_message(int(message_id))
+                if message.author.id != ctx.author.id:
+                    await ctx.send("❌ Вы можете использовать только ссылки на свои сообщения!")
+                    return
         except:
-            await ctx.send("❌ Не удалось найти сообщение.")
+            await ctx.send("❌ Не удалось проверить сообщение. Убедитесь, что ссылка корректна.")
             return
 
         existing = await reform_links_col.find_one({"message_id": message_id})
         if existing:
-            await ctx.send("❌ Эта ссылка уже использована.")
+            await ctx.send("❌ Эта ссылка уже была использована для реформ. Пожалуйста, приложите новое сообщение.")
             return
 
         user = await get_user(ctx.author.id)
+        if user['gdp'] == 0:
+            await ctx.send("❌ У тебя нет ВВП! Обратись к администратору.")
+            return
+
+        max_investment = user['gdp'] * 2
+        if amount > max_investment:
+            await ctx.send(f"❌ Максимальная инвестиция: **{max_investment:,}** 💵 (x2 от ВВП)")
+            return
+
         if user['balance'] < amount:
             await ctx.send(f"❌ Недостаточно денег! Баланс: {user['balance']:,} 💵")
             return
 
-        # Логика эффективности
         gdp = user['gdp']
-        if gdp < 300_000_000_000: efficiency = 0.50
-        elif gdp <= 500_000_000_000: efficiency = 0.40
-        elif gdp <= 900_000_000_000: efficiency = 0.30
-        elif gdp <= 2_800_000_000_000: efficiency = 0.15
-        else: efficiency = 0.10
+        if gdp < 300_000_000_000:
+            efficiency = 0.50; tier = "50%"
+        elif gdp <= 500_000_000_000:
+            efficiency = 0.40; tier = "40%"
+        elif gdp <= 900_000_000_000:
+            efficiency = 0.30; tier = "30%"
+        elif gdp <= 2_800_000_000_000:
+            efficiency = 0.15; tier = "15%"
+        else:
+            efficiency = 0.10; tier = "10%"
 
         gdp_gain = int(amount * efficiency)
-        new_gdp = gdp + gdp_gain
+        new_gdp = user['gdp'] + gdp_gain
         new_balance = user['balance'] - amount
 
         await reform_links_col.insert_one({
             "message_id": message_id,
+            "channel_id": channel_id,
             "used_by": str(ctx.author.id),
             "used_at": datetime.now().timestamp()
         })
 
-        await update_user(ctx.author.id, {'gdp': new_gdp, 'balance': new_balance})
+        await update_user(ctx.author.id, {
+            'gdp': new_gdp,
+            'balance': new_balance
+        })
 
-        embed = discord.Embed(title="🏗️ Реформы", color=discord.Color.blue())
+        embed = discord.Embed(
+            title="🏗️ Реформы",
+            description=f"{ctx.author.mention} вложил **{amount:,}** 💵 в ВВП\nПричина: [Ссылка]({message_link})",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Эффективность", value=f"{tier} от вложения", inline=False)
         embed.add_field(name="Прирост ВВП", value=f"+{gdp_gain:,} 💵", inline=True)
+        embed.add_field(name="Старый ВВП", value=f"{user['gdp']:,} 💵", inline=True)
         embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=True)
+        embed.add_field(name="Баланс", value=f"{new_balance:,} 💵", inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(name='pay')
@@ -1211,11 +1276,10 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
             return
 
-        can_submit, msg = await check_and_record_submission_atomic(ctx.author.id)
+        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
         if not can_submit:
-    await ctx.send(msg)
-    return
-# Submission is automatically recorded in the atomic operation!
+            await ctx.send(msg)
+            return
 
         info = await get_daily_submission_info(ctx.author.id)
         view = StartAddView(self, ctx.author.id, info)
