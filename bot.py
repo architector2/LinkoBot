@@ -608,7 +608,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
             await ctx.send("❌ Ссылка должна быть с этого сервера.")
             return
 
-        # Проверка канала
+        # Проверка канала (ID канала реформ)
         if channel_id != "1363585142593032412":
             await ctx.send("❌ Ссылка должна вести в канал реформ (<#1363585142593032412>).")
             return
@@ -621,13 +621,13 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 if message.author.id != ctx.author.id:
                     await ctx.send("❌ Вы можете использовать только ссылки на свои сообщения!")
                     return
-        except Exception as e:
+        except Exception:
             await ctx.send("❌ Не удалось проверить сообщение. Убедитесь, что ссылка корректна.")
             return
 
         existing = await reform_links_col.find_one({"message_id": message_id})
         if existing:
-            await ctx.send("❌ Эта ссылка уже была использована для реформ. Пожалуйста, приложите новое сообщение.")
+            await ctx.send("❌ Эта ссылка уже была использована для реформ.")
             return
 
         user = await get_user(ctx.author.id)
@@ -644,6 +644,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
             await ctx.send(f"❌ Недостаточно денег! Баланс: {user['balance']:,} 💵")
             return
 
+        # Расчет эффективности ВВП
         gdp = user['gdp']
         if gdp < 300_000_000_000:
             efficiency = 0.50; tier = "50%"
@@ -674,14 +675,14 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         embed = discord.Embed(
             title="🏗️ Реформы",
-            description=f"{ctx.author.mention} вложил **{amount:,}** 💵 в ВВП\nПричина: [Ссылка]({message_link})",
+            description=f"{ctx.author.mention} вложил **{amount:,}** 💵 в ВВП\n[Ссылка на реформу]({message_link})",
             color=discord.Color.blue()
         )
-        embed.add_field(name="Эффективность", value=f"{tier} от вложения", inline=False)
+        embed.add_field(name="Эффективность", value=tier, inline=True)
         embed.add_field(name="Прирост ВВП", value=f"+{gdp_gain:,} 💵", inline=True)
-        embed.add_field(name="Старый ВВП", value=f"{user['gdp']:,} 💵", inline=True)
-        embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=True)
+        embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=False)
         embed.add_field(name="Баланс", value=f"{new_balance:,} 💵", inline=False)
+        
         await ctx.send(embed=embed)
 
     @commands.command(name='pay')
