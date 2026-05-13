@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import motor.motor_asyncio
 from bson import ObjectId
+
 # ============ CRITICAL SECURITY ADDITIONS ============
  
 from urllib.parse import urlparse
@@ -1094,36 +1095,21 @@ class Admin(commands.Cog, name="👑 Админ"):
 
     @commands.command(name='add-money')
     @commands.has_permissions(administrator=True)
-    @commands.cooldown(1, 10, commands.BucketType.user)  # ADD COOLDOWN
-   async def add_money(self, ctx, member: discord.Member, amount: int):
-       """Выдать деньги на баланс игроку"""
-       # FIX: Validate amount
-       is_valid, error_msg = validate_amount(amount, min_val=1, max_val=MAX_MONEY)
-       if not is_valid:
-           await ctx.send(error_msg)
-           return
-       
-       user = await get_user(member.id)
-       new_balance = user['balance'] + amount
-       
-       # FIX: Check overflow
-       if new_balance > MAX_MONEY:
-           await ctx.send(f"❌ Баланс не может превышать {MAX_MONEY:,}.")
-           return
-       
-       await update_user(member.id, {'balance': new_balance})
-       
-       # FIX: Log action
-       log_msg = f"ADMIN: {ctx.author.id} добавил {amount:,} денег {member.id}"
-       print(log_msg)
-       
-       embed = discord.Embed(
-           title="💰 Деньги выданы",
-           description=f"{member.mention} получил **{amount:,}** 💵",
-           color=discord.Color.green()
-       )
-       embed.add_field(name="Новый баланс", value=f"{new_balance:,} 💵")
-       await ctx.send(embed=embed)
+    async def add_money(self, ctx, member: discord.Member, amount: int):
+        """Выдать деньги на баланс игроку"""
+        if amount <= 0:
+            await ctx.send("❌ Сумма должна быть больше 0.")
+            return
+        user = await get_user(member.id)
+        new_balance = user['balance'] + amount
+        await update_user(member.id, {'balance': new_balance})
+        embed = discord.Embed(
+            title="💰 Деньги выданы",
+            description=f"{member.mention} получил **{amount:,}** 💵",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Новый баланс", value=f"{new_balance:,} 💵")
+        await ctx.send(embed=embed)
 
     @commands.command(name='remove-sol')
     @commands.has_permissions(administrator=True)
