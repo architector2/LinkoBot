@@ -252,15 +252,7 @@ async def get_inventory(user_id: int) -> list:
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОБСЛУЖИВАНИЯ =====
 def get_vehicle_maintenance_cost_per_hour(gdp: int) -> int:
-    if gdp < 200_000_000_000:
-        return 500_000
-    elif gdp <= 500_000_000_000:
-        return 1_000_000
-    elif gdp <= 1_000_000_000_000:
-        return 2_500_000
-    else:
-        return 5_000_000
-
+    return 5_000_000  # Одна ставка для всех
 SOLDIER_MAINTENANCE_PER_HOUR = 100
 
 # ===== СОБЫТИЯ =====
@@ -1286,7 +1278,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         await ctx.send(
             f"Нажмите на кнопку чтобы зарегистрировать технику\n"
             f"Лимит заявок за день {info}\n"
-            f"КД после отправки 1 час",
+            f"КД после отправки 4 часа",
             view=view
         )
 
