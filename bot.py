@@ -978,7 +978,7 @@ class Admin(commands.Cog, name="👑 Админ"):
             await member.remove_roles(country_role)
         await ctx.send(f"✅ Статистика игрока {member.mention} полностью сброшена, роли обновлены.")
 
-    @commands.command(name='delete-vehicle', aliases=['del-vehicle'])
+    @commands.command(name='delete-vehicle')
     @commands.has_permissions(administrator=True)
     async def delete_vehicle(self, ctx, *, name_or_part: str):
         """Удалить технику из магазина (по названию или его части)"""
@@ -986,26 +986,25 @@ class Admin(commands.Cog, name="👑 Админ"):
         if not vehicles:
             await ctx.send("В магазине нет техники.")
             return
+
         matches = [v for v in vehicles if name_or_part.lower() in v['name'].lower()]
         if not matches:
             await ctx.send("Техника с таким названием не найдена.")
             return
+
         if len(matches) == 1:
             v = matches[0]
             confirm_view = ConfirmView(ctx.author.id, v['_id'], v['name'], self)
             await ctx.send(f"Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
         else:
-            options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
+            # FIX: Use str(v['_id']) as the value and pass 'self' to the view
+            options = [
+                discord.SelectOption(label=v['name'][:100], value=str(v['_id'])) 
+                for v in matches[:25]
+            ]
             select = Select(placeholder="Выберите технику для удаления...", options=options)
-            view = DeleteSelectView(ctx.author.id, matches, select)
+            view = DeleteSelectView(ctx.author.id, matches, select, self) # Pass 'self' here
             await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
-
-    async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
-        await vehicles_col.delete_one({'_id': vehicle_id})
-        await licenses_col.delete_many({'vehicle_name': name})
-        await inventory_col.delete_many({'item_name': name})
-        if interaction:
-            await interaction.response.send_message(f"✅ Техника **{name}** удалена из магазина.", ephemeral=True)
 
     @commands.command(name='invsee')
     @commands.has_permissions(administrator=True)
@@ -2274,21 +2273,32 @@ class ConfirmView(View):
         await interaction.response.edit_message(content="Удаление отменено.", view=None)
 
 class DeleteSelectView(View):
-    def __init__(self, author_id, matches, select: Select):
+    def __init__(self, author_id, matches, select: Select, admin_cog):
         super().__init__(timeout=60)
         self.author_id = author_id
         self.matches = matches
+        self.admin_cog = admin_cog  # Store the reference to the Admin cog
         select.callback = self.select_callback
         self.add_item(select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.author_id
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Это меню не для вас.", ephemeral=True)
+            return False
+        return True
 
     async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        vehicle = next(v for v in self.matches if v['name'] == selected_name)
-        await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
-
+        # Get the ID from the selection value
+        selected_id = interaction.data['values'][0]
+        
+        # Find the matching vehicle from the matches list using the ID
+        vehicle = next((v for v in self.matches if str(v['_id']) == selected_id), None)
+        
+        if vehicle:
+            # Use the passed cog reference to call the delete function
+            await self.admin_cog.delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
+        else:
+            await interaction.response.send_message("❌ Ошибка: Техника не найдена.", ephemeral=True)
 class TakeSelectView(View):
     def __init__(self, author_id: int, member: discord.Member, quantity: int, matches: list, select: Select, admin_cog):
         super().__init__(timeout=60)
