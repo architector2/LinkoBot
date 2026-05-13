@@ -1195,7 +1195,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
     ]
     APPROVAL_CHANNEL = 1502009375324110968
 
-    def __init__(self, bot):
+    def __init__(self, bot): 
         self.bot = bot
         self.pending_add = {}
 
