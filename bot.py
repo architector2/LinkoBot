@@ -9,16 +9,16 @@ import motor.motor_asyncio
 from bson import ObjectId
 
 # ============ CRITICAL SECURITY ADDITIONS ============
- 
+
 from urllib.parse import urlparse
 from typing import Tuple
- 
+
 # CONSTANTS
 MAX_MONEY = 10_000_000_000_000  # 10 trillion - prevent overflow attacks
 SAFE_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9а-яА-Я\s\-\.\'\"()]+$')
- 
+
 # ============ VALIDATION FUNCTIONS ============
- 
+
 def validate_amount(amount: int, min_val: int = 0, max_val: int = MAX_MONEY) -> Tuple[bool, str]:
     """Validate monetary amounts - CRITICAL FIX #1"""
     if not isinstance(amount, int):
@@ -28,7 +28,7 @@ def validate_amount(amount: int, min_val: int = 0, max_val: int = MAX_MONEY) -> 
     if amount > max_val:
         return False, f"❌ Максимальная сумма: {max_val:,} 💵"
     return True, ""
- 
+
 def validate_url(url: str) -> Tuple[bool, str]:
     """Validate URLs - CRITICAL FIX #2"""
     try:
@@ -36,7 +36,7 @@ def validate_url(url: str) -> Tuple[bool, str]:
             return False, "❌ URL не может быть пустым."
         if len(url) > 2048:
             return False, "❌ URL слишком длинный."
-        
+
         result = urlparse(url)
         if not result.scheme or not result.netloc:
             return False, "❌ Невалидная ссылка."
@@ -45,7 +45,7 @@ def validate_url(url: str) -> Tuple[bool, str]:
         return True, ""
     except Exception:
         return False, "❌ Невалидная ссылка."
- 
+
 def escape_mongodb_string(s: str) -> str:
     """Safely escape strings for MongoDB - CRITICAL FIX #3"""
     return re.escape(s.strip())
@@ -463,11 +463,11 @@ class Economy(commands.Cog, name="💰 Экономика"):
         total_budget_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
 
         # Содержание техники и солдат
-        inventory = await get_inventory(ctx.author.id)
+inventory = await get_inventory(ctx.author.id)
 total_soldier_maintenance = 0
 total_soldiers = 0
 total_vehicle_inventory_value = 0
- 
+
 for item in inventory:
     name = item['item_name']
     qty = item['quantity']
@@ -478,7 +478,7 @@ for item in inventory:
         vehicle = await vehicles_col.find_one({"approved": True, "name": name})
         if vehicle:
             total_vehicle_inventory_value += vehicle['price'] * qty
- 
+
 vehicle_cost = int(total_vehicle_inventory_value * 0.25)
 soldier_cost = int(total_soldier_maintenance * hours_passed)
 
@@ -1179,7 +1179,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         if not alliances:
             await ctx.send("❌ Альянсов не найдено.")
             return
-        
+
         # Если много альянсов, используем select вместо кнопок
         if len(alliances) > 5:
             options = [discord.SelectOption(label=a['name'][:100], value=str(a['_id'])) for a in alliances[:25]]
@@ -1933,7 +1933,7 @@ class Alliances(commands.Cog, name="🏛️ Альянсы"):
                 alliance_id = ObjectId(alliance_id)
             except:
                 return False
-        
+
         alliance = await get_alliance(alliance_id)
         if not alliance:
             return False
@@ -2669,10 +2669,10 @@ class AllyCreateModal(Modal, title="Создание альянса"):
             creator_name = creator.name if creator else f"User{self.user_id}"
             embed.add_field(name="Создатель", value=creator_name, inline=True)
             embed.set_footer(text=f"ID альянса: {result.inserted_id}")
-            
+
             view = AllyApprovalView(result.inserted_id, self.guild, self.user_id)
             await approval_channel.send(embed=embed, view=view)
-            
+
             await interaction.response.send_message("✅ Заявка на создание альянса отправлена на одобрение!", ephemeral=True)
         else:
             await interaction.response.send_message("❌ Канал для заявок не найден.", ephemeral=True)
@@ -3105,18 +3105,18 @@ class AdminAllyDeleteSelectView(View):
             alliance_id = interaction.data['values'][0]
             if isinstance(alliance_id, str):
                 alliance_id = ObjectId(alliance_id)
-            
+
             # Получаем Alliances cog по названию класса
             alliances_cog = None
             for cog in interaction.client.cogs.values():
                 if cog.__class__.__name__ == 'Alliances':
                     alliances_cog = cog
                     break
-            
+
             if not alliances_cog:
                 await interaction.response.send_message("❌ Ошибка: Cog не найден.", ephemeral=True)
                 return
-            
+
             result = await alliances_cog.delete_alliance(alliance_id)
             if result:
                 await interaction.response.send_message("✅ Альянс удален.", ephemeral=True)
@@ -3136,18 +3136,18 @@ class AdminAllyDeleteButton(discord.ui.Button):
             alliance_id = self.alliance_id
             if isinstance(alliance_id, str):
                 alliance_id = ObjectId(alliance_id)
-            
+
             # Получаем Alliances cog по названию класса
             alliances_cog = None
             for cog in interaction.client.cogs.values():
                 if cog.__class__.__name__ == 'Alliances':
                     alliances_cog = cog
                     break
-            
+
             if not alliances_cog:
                 await interaction.response.send_message("❌ Ошибка: Cog не найден.", ephemeral=True)
                 return
-            
+
             result = await alliances_cog.delete_alliance(alliance_id)
             if result:
                 await interaction.response.send_message("✅ Альянс удален.", ephemeral=True)
