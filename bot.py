@@ -993,7 +993,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         if len(matches) == 1:
             v = matches[0]
             confirm_view = ConfirmView(ctx.author.id, v['_id'], v['name'], self)
-            await ctx.send("Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
+          await ctx.send(f"Найдена техника: **{v['name']}**. Удалить?", view=confirm_view) 
         else:
     options = [discord.SelectOption(label=v['name'][:100], value=str(v['_id'])) for v in matches[:25]]
     select = Select(placeholder="Выберите технику для удаления...", options=options)
@@ -1004,7 +1004,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         await licenses_col.delete_many({'vehicle_name': name})
         await inventory_col.delete_many({'item_name': name})
         if interaction:
-            await interaction.response.send_message("✅ Техника **{name}** удалена из магазина.", ephemeral=True)
+           await interaction.response.send_message(f"✅ Техника **{name}** удалена из магазина.", ephemeral=True)
 
     @commands.command(name='invsee')
     @commands.has_permissions(administrator=True)
