@@ -41,40 +41,6 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-class DeletionSelect(discord.ui.Select):
-    def __init__(self, vehicles, user_id):
-        options = [
-            discord.SelectOption(
-                label=v['item_name'], 
-                description=f"Владелец ID: {v.get('user_id', '???')}", 
-                value=str(v['_id'])
-            ) for v in vehicles
-        ]
-        super().__init__(placeholder="Выбери технику для удаления...", options=options)
-        self.user_id = user_id
-
-    async def callback(self, interaction: discord.Interaction):
-        # Самое важное: моментальный ответ Дискорду
-        await interaction.response.defer()
-        
-        vehicle_id = self.values[0]
-        res = await inventory_col.find_one({'_id': ObjectId(vehicle_id)})
-        
-        if res:
-            name = res['item_name']
-            await inventory_col.delete_one({'_id': ObjectId(vehicle_id)})
-            await interaction.edit_original_response(
-                content=f"✅ Техника **{name}** успешно удалена.", 
-                view=None
-            )
-        else:
-            await interaction.edit_original_response(content="❌ Ошибка: Техника уже удалена или не найдена.", view=None)
-
-class DeletionView(discord.ui.View):
-    def __init__(self, vehicles, user_id):
-        super().__init__(timeout=30)
-        self.add_item(DeletionSelect(vehicles, user_id))
-
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БД =====
 DEFAULT_BUDGETS = {
     'budget_social': 10,
@@ -173,37 +139,40 @@ async def count_user_alliances_as_owner(user_id: int) -> int:
     return count
 
 # ===== ЛИМИТЫ ЗАЯВОК =====
-# ===== ЛИМИТЫ ЗАЯВОК (ОБНОВЛЕНО: БЕЗ ЛИМИТА, КД 4 ЧАСА) =====
 async def check_daily_submission_limit(user_id: int) -> tuple:
+    """Проверяет 4-часовой кулдаун. Дневной лимит отсутствует."""
     doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
-    if not doc:
-        return True, ''
-    
-    last_time = doc.get('last_submission_time', 0)
-    if last_time:
-        elapsed = datetime.now().timestamp() - last_time
-        cooldown_period = 4 * 3600  # 4 часа в секундах
-        
-        if elapsed < cooldown_period:
-            remaining = int(cooldown_period - elapsed)
-            hours, rem = divmod(remaining, 3600)
-            mins = rem // 60
-            secs = rem % 60
-            return False, f"⏰ Кулдаун! Подождите ещё **{hours}ч {mins}м {secs}с** перед следующей заявкой."
-            
+    if doc:
+        last_time = doc.get('last_submission_time', 0)
+        if last_time:
+            elapsed = datetime.now().timestamp() - last_time
+            if elapsed < 14400:   # 4 часа = 14400 секунд
+                remaining = int(14400 - elapsed)
+                mins = remaining // 60
+                secs = remaining % 60
+                return False, f"⏰ Кулдаун! Подождите ещё {mins}м {secs}с перед следующей заявкой."
+    # Если записи нет или прошло больше 4 часов – разрешаем
     return True, ''
-
 async def record_submission(user_id: int):
-    # Теперь мы только обновляем время последней заявки, игнорируя счетчик 'count'
+    """Обновляет только время последней заявки."""
     await daily_submissions_col.update_one(
         {'user_id': str(user_id)},
         {'$set': {'last_submission_time': datetime.now().timestamp()}},
         upsert=True
     )
-
 async def get_daily_submission_info(user_id: int) -> str:
-    # Так как лимита больше нет, возвращаем бесконечность или статус "Доступно"
-    return "∞"
+    """Возвращает строку о доступности / оставшемся кулдауне."""
+    doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
+    if doc:
+        last_time = doc.get('last_submission_time', 0)
+        if last_time:
+            elapsed = datetime.now().timestamp() - last_time
+            if elapsed < 14400:
+                remaining = int(14400 - elapsed)
+                mins = remaining // 60
+                secs = remaining % 60
+                return f"⏳ Кулдаун {mins}м {secs}с"
+    return "∞"   # можно подать – лимита нет
 
 # ===== ВЫЧИСЛЕНИЕ НЕДОВОЛЬСТВА =====
 def calculate_unhappiness_speed(user: dict) -> float:
@@ -265,9 +234,7 @@ async def get_inventory(user_id: int) -> list:
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОБСЛУЖИВАНИЯ =====
 def get_vehicle_maintenance_cost_per_hour(gdp: int) -> int:
-    """Возвращает фиксированную стоимость содержания одной единицы техники"""
-    return 5_000_000
-
+    return 5_000_000  # Одна ставка для всех
 SOLDIER_MAINTENANCE_PER_HOUR = 100
 
 # ===== СОБЫТИЯ =====
@@ -276,7 +243,7 @@ async def on_ready():
     print(f'✅ Бот {bot.user.name} запущен')
     print(f'Bot ID: {bot.user.id}')
     print(f'✅ Подключение к MongoDB Atlas установлено')
-    await bot.change_presence(activity=discord.Game(name="Военная-политическая-игра"))
+    await bot.change_presence(activity=discord.Game(name="Linko VPI"))
 
 @bot.event
 async def on_message(message):
@@ -985,33 +952,34 @@ class Admin(commands.Cog, name="👑 Админ"):
             await member.remove_roles(country_role)
         await ctx.send(f"✅ Статистика игрока {member.mention} полностью сброшена, роли обновлены.")
 
-# Пример правильного отступа внутри класса (обычно 4 пробела)
-    @commands.command(name='delete-vehicle')
+    @commands.command(name='delete-vehicle', aliases=['del-vehicle'])
     @commands.has_permissions(administrator=True)
-    async def delete_vehicle(self, ctx, *, name: str):
-        """Удалить технику (поиск по названию)"""
-        query = {"item_name": {"$regex": name, "$options": "i"}}
-        vehicles = await inventory_col.find(query).to_list(length=25)
-
+    async def delete_vehicle(self, ctx, *, name_or_part: str):
+        """Удалить технику из магазина (по названию или его части)"""
+        vehicles = await vehicles_col.find({"approved": True}).to_list(length=None)
         if not vehicles:
-            return await ctx.send("❌ Техника не найдена.")
-
-        if len(vehicles) == 1:
-            v_id = vehicles[0]['_id']
-            v_name = vehicles[0]['item_name']
-            await self.delete_vehicle_by_id(v_id, v_name)
-            await ctx.send(f"✅ Техника **{v_name}** удалена.")
+            await ctx.send("В магазине нет техники.")
+            return
+        matches = [v for v in vehicles if name_or_part.lower() in v['name'].lower()]
+        if not matches:
+            await ctx.send("Техника с таким названием не найдена.")
+            return
+        if len(matches) == 1:
+            v = matches[0]
+            confirm_view = ConfirmView(ctx.author.id, v['_id'], v['name'], self)
+            await ctx.send(f"Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
         else:
-            view = DeletionView(vehicles, ctx.author.id)
-            await ctx.send("🔎 Найдено несколько вариантов, выбери нужный:", view=view)
+            options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
+            select = Select(placeholder="Выберите технику для удаления...", options=options)
+            view = DeleteSelectView(ctx.author.id, matches, select, self)
+            await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
 
-    # Функция ниже должна быть на ТОМ ЖЕ уровне, что и функция выше
     async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
         await vehicles_col.delete_one({'_id': vehicle_id})
         await licenses_col.delete_many({'vehicle_name': name})
         await inventory_col.delete_many({'item_name': name})
         if interaction:
-            await interaction.response.send_message(f"✅ Техника **{name}** удалена.", ephemeral=True)
+            await interaction.response.send_message(f"✅ Техника **{name}** удалена из магазина.", ephemeral=True)
 
     @commands.command(name='invsee')
     @commands.has_permissions(administrator=True)
@@ -2280,10 +2248,11 @@ class ConfirmView(View):
         await interaction.response.edit_message(content="Удаление отменено.", view=None)
 
 class DeleteSelectView(View):
-    def __init__(self, author_id, matches, select: Select):
+    def __init__(self, author_id, matches, select: Select, admin_cog):
         super().__init__(timeout=60)
         self.author_id = author_id
         self.matches = matches
+        self.admin_cog = admin_cog        # сохраняем ссылку на ког
         select.callback = self.select_callback
         self.add_item(select)
 
@@ -2293,7 +2262,8 @@ class DeleteSelectView(View):
     async def select_callback(self, interaction: discord.Interaction):
         selected_name = interaction.data['values'][0]
         vehicle = next(v for v in self.matches if v['name'] == selected_name)
-        await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
+        # вызываем метод через сохранённый экземпляр кога
+        await self.admin_cog.delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
 
 class TakeSelectView(View):
     def __init__(self, author_id: int, member: discord.Member, quantity: int, matches: list, select: Select, admin_cog):
