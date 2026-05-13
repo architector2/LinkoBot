@@ -997,7 +997,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         else:
             options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
             select = Select(placeholder="Выберите технику для удаления...", options=options)
-            view = DeleteSelectView(ctx.author.id, matches, select)
+            view = DeleteSelectView(ctx.author.id, matches, select, self)
             await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
 
     async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
@@ -2274,10 +2274,11 @@ class ConfirmView(View):
         await interaction.response.edit_message(content="Удаление отменено.", view=None)
 
 class DeleteSelectView(View):
-    def __init__(self, author_id, matches, select: Select):
+    def __init__(self, author_id, matches, select: Select, admin_cog):
         super().__init__(timeout=60)
         self.author_id = author_id
         self.matches = matches
+        self.admin_cog = admin_cog        # сохраняем ссылку на ког
         select.callback = self.select_callback
         self.add_item(select)
 
@@ -2287,7 +2288,8 @@ class DeleteSelectView(View):
     async def select_callback(self, interaction: discord.Interaction):
         selected_name = interaction.data['values'][0]
         vehicle = next(v for v in self.matches if v['name'] == selected_name)
-        await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
+        # вызываем метод через сохранённый экземпляр кога
+        await self.admin_cog.delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
 
 class TakeSelectView(View):
     def __init__(self, author_id: int, member: discord.Member, quantity: int, matches: list, select: Select, admin_cog):
