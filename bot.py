@@ -2274,32 +2274,21 @@ class ConfirmView(View):
         await interaction.response.edit_message(content="Удаление отменено.", view=None)
 
 class DeleteSelectView(View):
-    def __init__(self, author_id, matches, select: Select, admin_cog):
+    def __init__(self, author_id, matches, select: Select):
         super().__init__(timeout=60)
         self.author_id = author_id
         self.matches = matches
-        self.admin_cog = admin_cog  # Store the reference to the Admin cog
         select.callback = self.select_callback
         self.add_item(select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.author_id:
-            await interaction.response.send_message("❌ Это меню не для вас.", ephemeral=True)
-            return False
-        return True
+        return interaction.user.id == self.author_id
 
     async def select_callback(self, interaction: discord.Interaction):
-        # Get the ID from the selection value
-        selected_id = interaction.data['values'][0]
-        
-        # Find the matching vehicle from the matches list using the ID
-        vehicle = next((v for v in self.matches if str(v['_id']) == selected_id), None)
-        
-        if vehicle:
-            # Use the passed cog reference to call the delete function
-            await self.admin_cog.delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
-        else:
-            await interaction.response.send_message("❌ Ошибка: Техника не найдена.", ephemeral=True)
+        selected_name = interaction.data['values'][0]
+        vehicle = next(v for v in self.matches if v['name'] == selected_name)
+        await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
+
 class TakeSelectView(View):
     def __init__(self, author_id: int, member: discord.Member, quantity: int, matches: list, select: Select, admin_cog):
         super().__init__(timeout=60)
