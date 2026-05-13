@@ -269,7 +269,7 @@ async def on_ready():
     print(f'✅ Бот {bot.user.name} запущен')
     print(f'Bot ID: {bot.user.id}')
     print(f'✅ Подключение к MongoDB Atlas установлено')
-    await bot.change_presence(activity=discord.Game(name="Военная-политическая-игра"))
+    await bot.change_presence(activity=discord.Game(name="Linko VPI"))
 
 @bot.event
 async def on_message(message):
