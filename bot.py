@@ -1005,7 +1005,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         await licenses_col.delete_many({'vehicle_name': name})
         await inventory_col.delete_many({'item_name': name})
         if interaction:
-            await interaction.response.send_message("✅ Техника **{name}** удалена из магазина.", ephemeral=True)
+            await interaction.response.send_message(f"✅ Техника **{name}** удалена из магазина.", ephemeral=True)
 
     @commands.command(name='invsee')
     @commands.has_permissions(administrator=True)
