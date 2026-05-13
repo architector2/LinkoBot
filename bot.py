@@ -483,7 +483,7 @@ vehicle_cost = int(total_vehicle_inventory_value * 0.25)
 soldier_cost = int(total_soldier_maintenance * hours_passed)
 
 
-        for item in inventory:
+for item in inventory:
             name = item['item_name']
             qty = item['quantity']
             if name == "Обученный Солдат":
