@@ -463,12 +463,25 @@ class Economy(commands.Cog, name="💰 Экономика"):
         total_budget_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
 
         # Содержание техники и солдат
-        inventory = await get_inventory(ctx.author.id)
-        vehicle_cost_per_hour = get_vehicle_maintenance_cost_per_hour(user['gdp'])
-        total_vehicle_maintenance = 0
-        total_soldier_maintenance = 0
-        total_units = 0
-        total_soldiers = 0
+       inventory = await get_inventory(ctx.author.id)
+total_soldier_maintenance = 0
+total_soldiers = 0
+total_vehicle_inventory_value = 0
+ 
+for item in inventory:
+    name = item['item_name']
+    qty = item['quantity']
+    if name == "Обученный Солдат":
+        total_soldiers += qty
+        total_soldier_maintenance += qty * SOLDIER_MAINTENANCE_PER_HOUR
+    else:
+        vehicle = await vehicles_col.find_one({"approved": True, "name": name})
+        if vehicle:
+            total_vehicle_inventory_value += vehicle['price'] * qty
+ 
+vehicle_cost = int(total_vehicle_inventory_value * 0.25)
+soldier_cost = int(total_soldier_maintenance * hours_passed)
+
 
         for item in inventory:
             name = item['item_name']
@@ -553,11 +566,12 @@ class Economy(commands.Cog, name="💰 Экономика"):
         )
 
         if vehicle_cost > 0:
-            embed.add_field(
-                name="🛠️ Содержание техники",
-                value=f"Кол-во единиц: {total_units:,}\nРасход: -{vehicle_cost:,} 💵",
-                inline=False
-            )
+    embed.add_field(
+        name="🛠️ Содержание техники (25% от стоимости)",
+        value=f"Общая стоимость: {total_vehicle_inventory_value:,} 💵\nРасход: -{vehicle_cost:,} 💵",
+        inline=False
+    )
+
         if soldier_cost > 0:
             embed.add_field(
                 name="🪖 Содержание солдат",
