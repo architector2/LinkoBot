@@ -978,7 +978,7 @@ class Admin(commands.Cog, name="👑 Админ"):
             await member.remove_roles(country_role)
         await ctx.send(f"✅ Статистика игрока {member.mention} полностью сброшена, роли обновлены.")
 
-    @commands.command(name='delete-vehicle')
+    @commands.command(name='delete-vehicle', aliases=['del-vehicle'])
     @commands.has_permissions(administrator=True)
     async def delete_vehicle(self, ctx, *, name_or_part: str):
         """Удалить технику из магазина (по названию или его части)"""
@@ -986,25 +986,26 @@ class Admin(commands.Cog, name="👑 Админ"):
         if not vehicles:
             await ctx.send("В магазине нет техники.")
             return
-
         matches = [v for v in vehicles if name_or_part.lower() in v['name'].lower()]
         if not matches:
             await ctx.send("Техника с таким названием не найдена.")
             return
-
         if len(matches) == 1:
             v = matches[0]
             confirm_view = ConfirmView(ctx.author.id, v['_id'], v['name'], self)
             await ctx.send(f"Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
         else:
-            # FIX: Use str(v['_id']) as the value and pass 'self' to the view
-            options = [
-                discord.SelectOption(label=v['name'][:100], value=str(v['_id'])) 
-                for v in matches[:25]
-            ]
+            options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
             select = Select(placeholder="Выберите технику для удаления...", options=options)
-            view = DeleteSelectView(ctx.author.id, matches, select, self) # Pass 'self' here
+            view = DeleteSelectView(ctx.author.id, matches, select)
             await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
+
+    async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
+        await vehicles_col.delete_one({'_id': vehicle_id})
+        await licenses_col.delete_many({'vehicle_name': name})
+        await inventory_col.delete_many({'item_name': name})
+        if interaction:
+            await interaction.response.send_message("✅ Техника **{name}** удалена из магазина.", ephemeral=True)
 
     @commands.command(name='invsee')
     @commands.has_permissions(administrator=True)
