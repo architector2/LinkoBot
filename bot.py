@@ -993,13 +993,12 @@ class Admin(commands.Cog, name="👑 Админ"):
         if len(matches) == 1:
             v = matches[0]
             confirm_view = ConfirmView(ctx.author.id, v['_id'], v['name'], self)
-            await ctx.send(f"Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
+            await ctx.send("Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
         else:
-            options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
-            select = Select(placeholder="Выберите технику для удаления...", options=options)
-            view = DeleteSelectView(ctx.author.id, matches, select)
-            await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
-
+    options = [discord.SelectOption(label=v['name'][:100], value=str(v['_id'])) for v in matches[:25]]
+    select = Select(placeholder="Выберите технику для удаления...", options=options)
+    view = DeleteSelectView(ctx.author.id, matches, select, self)  # передаём self (Admin cog)
+    await ctx.send(f"Найдена техника: **{v['name']}**. Удалить?", view=confirm_view)
     async def delete_vehicle_by_id(self, vehicle_id, name, interaction=None):
         await vehicles_col.delete_one({'_id': vehicle_id})
         await licenses_col.delete_many({'vehicle_name': name})
@@ -1033,7 +1032,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         if len(matches) == 1:
             await self._process_take_removal(ctx, member, matches[0], quantity, interaction=None)
         else:
-            options = [discord.SelectOption(label=it['item_name'][:100]) for it in matches[:25]]
+            options = [discord.SelectOption(label=it['item_name'][:100], value=str(it['_id'])) for it in matches[:25]]
             select = Select(placeholder="Выберите предмет для изъятия...", options=options)
             view = TakeSelectView(ctx.author.id, member, quantity, matches, select, self)
             await ctx.send("Найдено несколько предметов. Выберите:", view=view)
@@ -1485,7 +1484,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         if len(matches) == 1:
             await self._process_use(ctx.author, matches[0], quantity, interaction=None, ctx=ctx)
         else:
-            options = [discord.SelectOption(label=it['item_name'][:100]) for it in matches[:25]]
+            options = [discord.SelectOption(label=it['item_name'][:100], value=str(it['_id'])) for it in matches[:25]]
             select = Select(placeholder="Выберите предмет для использования...", options=options)
             view = UseSelectView(ctx.author.id, quantity, matches, select, self)
             await ctx.send("Найдено несколько предметов. Выберите:", view=view)
@@ -1523,7 +1522,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             if len(matches) == 1:
                 vehicle = matches[0]
             else:
-                options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
+                options = [discord.SelectOption(label=v['name'][:100], value=str(v['_id'])) for v in matches[:25]]
                 select = Select(placeholder="Выберите технику...", options=options)
                 view = VehicleInfoSelectView(ctx.author.id, matches, select, self)
                 await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
@@ -1575,7 +1574,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             await vehicles_col.update_one({'_id': v['_id']}, {'$set': {'image_url': image_url}})
             await ctx.send(f"✅ Изображение для **{v['name']}** обновлено.")
         else:
-            options = [discord.SelectOption(label=v['name'][:100]) for v in vehicles[:25]]
+           options = [discord.SelectOption(label=v['name'][:100], value=str(v['_id'])) for v in vehicles[:25]]
             select = Select(placeholder="Выберите технику...", options=options)
             view = IsoSelectView(ctx.author.id, vehicles, select, image_url, self)
             await ctx.send("Выберите технику, для которой нужно установить изображение:", view=view)
@@ -2190,8 +2189,8 @@ class VehicleInfoSelectView(View):
         return interaction.user.id == self.author_id
 
     async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        vehicle = next((v for v in self.matches if v['name'] == selected_name), None)
+        vehicle_id = interaction.data['values'][0]
+        vehicle = next((v for v in self.matches if str(v['_id']) == vehicle_id), None)
         if vehicle:
             embed = await self.shop_cog.build_vehicle_info_embed(vehicle)
             await interaction.response.edit_message(embed=embed, view=None)
@@ -2210,8 +2209,8 @@ class IsoSelectView(View):
         return interaction.user.id == self.author_id
 
     async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        vehicle = next((v for v in self.matches if v['name'] == selected_name), None)
+        vehicle_id = interaction.data['values'][0]
+        vehicle = next((v for v in self.matches if str(v['_id']) == vehicle_id), None)
         if vehicle:
             await vehicles_col.update_one({'_id': vehicle['_id']}, {'$set': {'image_url': self.image_url}})
             await interaction.response.send_message(f"✅ Изображение для **{vehicle['name']}** обновлено.", ephemeral=True)
@@ -2274,10 +2273,11 @@ class ConfirmView(View):
         await interaction.response.edit_message(content="Удаление отменено.", view=None)
 
 class DeleteSelectView(View):
-    def __init__(self, author_id, matches, select: Select):
+    def __init__(self, author_id, matches, select: Select, admin_cog):
         super().__init__(timeout=60)
         self.author_id = author_id
         self.matches = matches
+        self.admin_cog = admin_cog
         select.callback = self.select_callback
         self.add_item(select)
 
@@ -2285,9 +2285,10 @@ class DeleteSelectView(View):
         return interaction.user.id == self.author_id
 
     async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        vehicle = next(v for v in self.matches if v['name'] == selected_name)
-        await Admin().delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
+        vehicle_id = interaction.data['values'][0]  # теперь ID, а не имя
+        vehicle = next((v for v in self.matches if str(v['_id']) == vehicle_id), None)
+        if vehicle:
+            await self.admin_cog.delete_vehicle_by_id(vehicle['_id'], vehicle['name'], interaction)
 
 class TakeSelectView(View):
     def __init__(self, author_id: int, member: discord.Member, quantity: int, matches: list, select: Select, admin_cog):
@@ -2304,8 +2305,8 @@ class TakeSelectView(View):
         return interaction.user.id == self.author_id
 
     async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        item = next((it for it in self.matches if it['item_name'] == selected_name), None)
+        item_id = interaction.data['values'][0]
+        item = next((it for it in self.matches if str(it['_id']) == item_id), None)
         if item:
             await self.admin_cog._process_take_removal(None, self.member, item, self.quantity, interaction)
         self.stop()
@@ -2324,8 +2325,8 @@ class UseSelectView(View):
         return interaction.user.id == self.author_id
 
     async def select_callback(self, interaction: discord.Interaction):
-        selected_name = interaction.data['values'][0]
-        item = next((it for it in self.matches if it['item_name'] == selected_name), None)
+        item_id = interaction.data['values'][0]
+        item = next((it for it in self.matches if str(it['_id']) == item_id), None)
         if item:
             await self.shop_cog._process_use(interaction.user, item, self.quantity, interaction)
         self.stop()
