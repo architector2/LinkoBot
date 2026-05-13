@@ -147,11 +147,10 @@ async def check_daily_submission_limit(user_id: int) -> tuple:
         if last_time:
             elapsed = datetime.now().timestamp() - last_time
             if elapsed < 14400:   # 4 часа = 14400 секунд
-               # New version (shows hours and mins)
-            remaining = int(14400 - elapsed)
-            hours = remaining // 3600
-            mins = (remaining % 3600) // 60
-            return False, f"⏰ Кулдаун! Подождите ещё {hours}ч {mins}м перед следующей заявкой."
+                remaining = int(14400 - elapsed)
+                hours = remaining // 3600
+                mins = (remaining % 3600) // 60
+                return False, f"⏰ Кулдаун! Подождите ещё {hours}ч {mins}м перед следующей заявкой."
     # Если записи нет или прошло больше 4 часов – разрешаем
     return True, ''
 async def record_submission(user_id: int):
@@ -171,10 +170,9 @@ async def get_daily_submission_info(user_id: int) -> str:
             if elapsed < 14400:
                 remaining = int(14400 - elapsed)
                 hours = remaining // 3600
-                mins = remaining % 3600 // 60
+                mins = (remaining % 3600) // 60
                 return f"⏳ Кулдаун {hours}ч {mins}м"
-    return "∞"   # можно подать – лимита нет
-
+    return "∞"
 # ===== ВЫЧИСЛЕНИЕ НЕДОВОЛЬСТВА =====
 def calculate_unhappiness_speed(user: dict) -> float:
     speed = 0.0
