@@ -145,7 +145,7 @@ async def check_daily_submission_limit(user_id: int) -> tuple:
 async def record_submission(user_id: int):
     pass   # Не отслеживаем количество заявок
 async def get_daily_submission_info(user_id: int) -> str:
-    return "∞/∞"
+    return "∞"
 
 # ===== ВЫЧИСЛЕНИЕ НЕДОВОЛЬСТВА =====
 def calculate_unhappiness_speed(user: dict) -> float:
