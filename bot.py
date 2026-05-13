@@ -463,7 +463,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         total_budget_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
 
         # Содержание техники и солдат
-       inventory = await get_inventory(ctx.author.id)
+        inventory = await get_inventory(ctx.author.id)
 total_soldier_maintenance = 0
 total_soldiers = 0
 total_vehicle_inventory_value = 0
