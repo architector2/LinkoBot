@@ -8,6 +8,47 @@ from datetime import datetime, timedelta
 import motor.motor_asyncio
 from bson import ObjectId
 
+# ============ CRITICAL SECURITY ADDITIONS ============
+ 
+from urllib.parse import urlparse
+from typing import Tuple
+ 
+# CONSTANTS
+MAX_MONEY = 10_000_000_000_000  # 10 trillion - prevent overflow attacks
+SAFE_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9а-яА-Я\s\-\.\'\"()]+$')
+ 
+# ============ VALIDATION FUNCTIONS ============
+ 
+def validate_amount(amount: int, min_val: int = 0, max_val: int = MAX_MONEY) -> Tuple[bool, str]:
+    """Validate monetary amounts - CRITICAL FIX #1"""
+    if not isinstance(amount, int):
+        return False, "❌ Сумма должна быть целым числом."
+    if amount < min_val:
+        return False, f"❌ Сумма должна быть не менее {min_val:,}."
+    if amount > max_val:
+        return False, f"❌ Максимальная сумма: {max_val:,} 💵"
+    return True, ""
+ 
+def validate_url(url: str) -> Tuple[bool, str]:
+    """Validate URLs - CRITICAL FIX #2"""
+    try:
+        if not url or len(url) == 0:
+            return False, "❌ URL не может быть пустым."
+        if len(url) > 2048:
+            return False, "❌ URL слишком длинный."
+        
+        result = urlparse(url)
+        if not result.scheme or not result.netloc:
+            return False, "❌ Невалидная ссылка."
+        if result.scheme not in ('http', 'https'):
+            return False, "❌ Только HTTP(S) ссылки разрешены."
+        return True, ""
+    except Exception:
+        return False, "❌ Невалидная ссылка."
+ 
+def escape_mongodb_string(s: str) -> str:
+    """Safely escape strings for MongoDB - CRITICAL FIX #3"""
+    return re.escape(s.strip())
 # Загрузка переменных окружения
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -151,9 +192,9 @@ async def check_daily_submission_limit(user_id: int) -> tuple:
             elapsed = datetime.now().timestamp() - last_time
             if elapsed < 14400:   # 4 часа = 14400 секунд
                 remaining = int(14400 - elapsed)
-                mins = remaining // 60
-                secs = remaining % 60
-                return False, f"⏰ Кулдаун! Подождите ещё {mins}м {secs}с перед следующей заявкой."
+                hours = remaining // 3600
+                mins = (remaining % 3600) // 60
+                return False, f"⏰ Кулдаун! Подождите ещё {hours}ч {mins}м перед следующей заявкой."
     # Если записи нет или прошло больше 4 часов – разрешаем
     return True, ''
 
@@ -174,11 +215,10 @@ async def get_daily_submission_info(user_id: int) -> str:
             elapsed = datetime.now().timestamp() - last_time
             if elapsed < 14400:
                 remaining = int(14400 - elapsed)
-                mins = remaining // 60
-                secs = remaining % 60
-                return f"⏳ Кулдаун {mins}м {secs}с"
-    return "∞"   # можно подать – лимита нет
-
+                hours = remaining // 3600
+                mins = (remaining % 3600) // 60
+                return f"⏳ Кулдаун {hours}ч {mins}м"
+    return "∞"
 # ===== ВЫЧИСЛЕНИЕ НЕДОВОЛЬСТВА =====
 def calculate_unhappiness_speed(user: dict) -> float:
     speed = 0.0
