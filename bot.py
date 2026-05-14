@@ -67,6 +67,7 @@ async def get_user(user_id: int) -> dict:
             'unhappiness': 0.0,
             'last_unhappiness_update': 0,
             'country': None,
+            'country_flag_url': None,
             'mobilization_percent': 2.5,
             'mobilization_used': False,
             'alliance_id': None,
@@ -90,6 +91,8 @@ async def get_user(user_id: int) -> dict:
             update['last_unhappiness_update'] = 0
         if 'country' not in user:
             update['country'] = None
+        if 'country_flag_url' not in user:
+            update['country_flag_url'] = None
         if 'mobilization_percent' not in user:
             update['mobilization_percent'] = 2.5
         if 'mobilization_used' not in user:
@@ -153,6 +156,7 @@ async def check_daily_submission_limit(user_id: int) -> tuple:
                 return False, f"⏰ Кулдаун! Подождите ещё {mins}м {secs}с перед следующей заявкой."
     # Если записи нет или прошло больше 4 часов – разрешаем
     return True, ''
+
 async def record_submission(user_id: int):
     """Обновляет только время последней заявки."""
     await daily_submissions_col.update_one(
@@ -160,6 +164,7 @@ async def record_submission(user_id: int):
         {'$set': {'last_submission_time': datetime.now().timestamp()}},
         upsert=True
     )
+
 async def get_daily_submission_info(user_id: int) -> str:
     """Возвращает строку о доступности / оставшемся кулдауне."""
     doc = await daily_submissions_col.find_one({'user_id': str(user_id)})
@@ -233,8 +238,24 @@ async def get_inventory(user_id: int) -> list:
     return await cursor.to_list(length=None)
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОБСЛУЖИВАНИЯ =====
-def get_vehicle_maintenance_cost_per_hour(gdp: int) -> int:
-    return 5_000_000  # Одна ставка для всех
+async def get_vehicle_maintenance_cost_per_hour(user_id: int) -> int:
+    """Рассчитывает стоимость содержания как 20% от стоимости техники в инвентаре за час"""
+    inventory = await get_inventory(user_id)
+    total_cost = 0
+    
+    for item in inventory:
+        if item['item_name'] == "Обученный Солдат":
+            continue
+        
+        # Получаем цену техники
+        vehicle = await vehicles_col.find_one({'name': item['item_name'], 'approved': True})
+        if vehicle:
+            total_cost += vehicle['price'] * item['quantity']
+    
+    # 20% от общей стоимости техники
+    maintenance = int(total_cost * 0.2)
+    return maintenance
+
 SOLDIER_MAINTENANCE_PER_HOUR = 100
 
 # ===== СОБЫТИЯ =====
@@ -259,7 +280,6 @@ USAGE_HINTS = {
     'budjet': '❌ Использование: `!budjet <категория> <процент>`\nКатегории: `социальные-расходы`, `образование`, `здравоохранение`\nПример: `!budjet образование 10`',
     'budjet-info': '❌ Использование: `!budjet-info` или `!budjet-info @игрок`',
     'shop': '❌ Команда `!shop` не требует аргументов.\nПросто напиши `!shop`.',
-    'add-vehicle': '❌ Команда `!add-vehicle` не требует аргументов.\nПросто напиши `!add-vehicle` и следуй инструкциям.',
     'give-lic': '❌ Использование: `!give-lic @игрок <название техники или all>`\nПример: `!give-lic @Undervud Т-90` или `!give-lic @Undervud all`',
     'buy': '❌ Использование: `!buy <количество> <название техники>`\nПример: `!buy 3 Т-90`\nПри частичном совпадении будет предложен выбор.',
     'inv': '❌ Команда `!inv` не требует аргументов.\nПросто напиши `!inv` — инвентарь придёт в ЛС.',
@@ -267,24 +287,15 @@ USAGE_HINTS = {
     'take-item': '❌ Использование: `!take-item @игрок <количество> <название или часть названия>`\nПример: `!take-item @Undervud 100 Т-`',
     'give-item': '❌ Использование: `!give-item @игрок <количество> <название>`\nПример: `!give-item @Undervud 5 Т-90`',
     'use': '❌ Использование: `!use <количество> <название предмета>`\nПример: `!use 50 Т-90`',
-    'give-vvp': '❌ Использование: `!give-vvp @игрок <сумма>`\nПример: `!give-vvp @Undervud 1000000000`',
-    'naselprocent': '❌ Использование: `!naselprocent @игрок <1-100>`\nПример: `!naselprocent @Undervud 3`',
-    'nasel-redakt': '❌ Использование: `!nasel-redakt @игрок <число>`\nПример: `!nasel-redakt @Undervud 1000000` или `!nasel-redakt @Undervud -500000`',
-    'happines': '❌ Использование: `!happines @игрок <процент>`\nПример: `!happines @Undervud 80`',
-    'reg': '❌ Использование: `!reg @игрок <название страны>`\nПример: `!reg @Undervud Франция`',
-    'unreg': '❌ Использование: `!unreg @игрок`',
     'delete-vehicle': '❌ Использование: `!delete-vehicle <название или часть названия>`\nПример: `!delete-vehicle Т-90`',
     'players-country': '❌ Команда `!players-country` не требует аргументов.',
-    'add-money': '❌ Использование: `!add-money @игрок <сумма>`\nПример: `!add-money @Undervud 1000000`',
     'top': '❌ Команда `!top` не требует аргументов.',
     'vehicle-info': '❌ Использование: `!vehicle-info <название/часть названия>`\nПример: `!vehicle-info Т-90`',
     'iso': '❌ Использование: `!iso <название/часть названия> <ссылка на изображение>`\nПример: `!iso Т-90 https://i.imgur.com/abc.png` (доступно только владельцу техники)',
-    'mobilization': '❌ Команда `!mobilization` не требует аргументов. Открывает панель мобилизации.',
     'remove-sol': '❌ Использование: `!remove-sol @игрок <число>`\nПример: `!remove-sol @Undervud 5000`',
     'add-sol': '❌ Использование: `!add-sol @игрок <число>`\nПример: `!add-sol @Undervud 10000`',
-    'priziv-redakt': '❌ Использование: `!priziv-redakt @игрок <число от 2.5 до 25>`',
-    'abb-baff': '❌ Использование: `!abb-baff @игрок`',
-    'modernization': '❌ Команда `!modernization` не требует аргументов.',
+    'full-reg': '❌ Использование: `!full-reg @игрок`\nПолная панель редактирования профиля игрока.',
+    'military': '❌ Команда `!military` не требует аргументов.',
     'ally-create': '❌ Команда `!ally-create` не требует аргументов. Просто напиши `!ally-create`.',
     'ally': '❌ Команда `!ally` не требует аргументов.',
     'ally-invite': '❌ Использование: `!ally-invite @игрок`\nПример: `!ally-invite @Undervud`',
@@ -359,7 +370,7 @@ class General(commands.Cog, name="⚙️ Основные"):
     async def info(self, ctx):
         """Информация о боте"""
         embed = discord.Embed(title="LinkoBot", description="Бот для сервера Военная-политическая-игра", color=discord.Color.blue())
-        embed.add_field(name="Версия", value="3.0.0", inline=False)
+        embed.add_field(name="Версия", value="3.1.0", inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(name='players-country')
@@ -422,12 +433,11 @@ class Economy(commands.Cog, name="💰 Экономика"):
         deduct_other = int(gross_income * budget_other / 100)
         total_budget_deduct = deduct_social + deduct_education + deduct_healthcare + deduct_other
 
-        # Содержание техники и солдат
+        # Содержание техники и солдат (новая система)
+        vehicle_cost_per_hour = await get_vehicle_maintenance_cost_per_hour(ctx.author.id)
+        
         inventory = await get_inventory(ctx.author.id)
-        vehicle_cost_per_hour = get_vehicle_maintenance_cost_per_hour(user['gdp'])
-        total_vehicle_maintenance = 0
         total_soldier_maintenance = 0
-        total_units = 0
         total_soldiers = 0
 
         for item in inventory:
@@ -436,11 +446,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
             if name == "Обученный Солдат":
                 total_soldiers += qty
                 total_soldier_maintenance += qty * SOLDIER_MAINTENANCE_PER_HOUR
-            else:
-                total_units += qty
-                total_vehicle_maintenance += qty * vehicle_cost_per_hour
 
-        vehicle_cost = int(total_vehicle_maintenance * hours_passed)
+        vehicle_cost = int(vehicle_cost_per_hour * hours_passed)
         soldier_cost = int(total_soldier_maintenance * hours_passed)
 
         # ===== НАЛОГ АЛЬЯНСА =====
@@ -514,8 +521,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         if vehicle_cost > 0:
             embed.add_field(
-                name="🛠️ Содержание техники",
-                value=f"Кол-во единиц: {total_units:,}\nРасход: -{vehicle_cost:,} 💵",
+                name="🛠️ Содержание техники (20% от стоимости)",
+                value=f"Расход: -{vehicle_cost:,} 💵",
                 inline=False
             )
         if soldier_cost > 0:
@@ -705,7 +712,13 @@ class Economy(commands.Cog, name="💰 Экономика"):
             title=f"📊 Статистика {display_name}",
             color=discord.Color.blurple()
         )
-        embed.set_thumbnail(url=member.display_avatar.url)
+        
+        # Используем флаг страны если есть, иначе аватарку
+        if user.get('country_flag_url'):
+            embed.set_thumbnail(url=user['country_flag_url'])
+        else:
+            embed.set_thumbnail(url=member.display_avatar.url)
+            
         embed.add_field(name="💰 Баланс", value=f"{user['balance']:,} 💵", inline=True)
         embed.add_field(name="📈 ВВП", value=f"{user['gdp']:,} 💵", inline=True)
         embed.add_field(name="⏱️ Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
@@ -835,122 +848,32 @@ class Admin(commands.Cog, name="👑 Админ"):
         embed.set_footer(text=f"Запросил: {ctx.author.name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
-    @commands.command(name='give-vvp')
+    @commands.command(name='full-reg')
     @commands.has_permissions(administrator=True)
-    async def give_gdp(self, ctx, member: discord.Member, amount: int):
-        """Выдать ВВП игроку"""
-        if amount <= 0:
-            await ctx.send("❌ Сумма должна быть больше 0!"); return
+    async def full_reg(self, ctx, member: discord.Member):
+        """Полная панель редактирования профиля игрока"""
         user = await get_user(member.id)
-        new_gdp = user['gdp'] + amount
-        await update_user(member.id, {'gdp': new_gdp})
-        embed = discord.Embed(title="📈 ВВП выдан", description=f"{member.mention} получил **{amount:,}** ВВП", color=discord.Color.green())
-        embed.add_field(name="Новый ВВП", value=f"{new_gdp:,} 💵", inline=False)
-        await ctx.send(embed=embed)
+        embed = await self._build_full_reg_embed(member, user)
+        view = FullRegView(self, member.id, user)
+        await ctx.send(embed=embed, view=view)
 
-    @commands.command(name='naselprocent')
-    @commands.has_permissions(administrator=True)
-    async def nasel_procent(self, ctx, member: discord.Member, percent: float):
-        """Установить годовой % прироста населения игроку (1–100)"""
-        if percent < 1 or percent > 100:
-            await ctx.send("❌ Процент должен быть от **1** до **100**!"); return
-        await update_user(member.id, {'pop_growth_yearly': percent})
-        embed = discord.Embed(title="📊 Прирост населения обновлён", description=f"{member.mention} — новый годовой прирост: **{percent:.2f}%**", color=discord.Color.blue())
-        hourly = percent / 48
-        embed.add_field(name="Прирост в час", value=f"{hourly:.4f}% (1 игровой год = 48 ч)", inline=False)
-        await ctx.send(embed=embed)
-
-    @commands.command(name='nasel-redakt')
-    @commands.has_permissions(administrator=True)
-    async def nasel_redakt(self, ctx, member: discord.Member, amount: int):
-        """Изменить количество населения у игрока"""
-        user = await get_user(member.id)
-        old_population = user.get('population', 0)
-        new_population = old_population + amount
-        if new_population < 0:
-            await ctx.send(f"❌ Нельзя уйти в минус! Текущее население: **{old_population:,}** чел.")
-            return
-        current_time = datetime.now().timestamp()
-        update_data = {'population': new_population}
-        if old_population == 0 and new_population > 0:
-            update_data['last_pop_update'] = current_time
-        if new_population == 0:
-            update_data['last_pop_update'] = 0
-        await update_user(member.id, update_data)
-        action = "получил" if amount >= 0 else "потерял"
-        sign = "+" if amount >= 0 else ""
-        color = discord.Color.green() if amount >= 0 else discord.Color.red()
-        embed = discord.Embed(title="👥 Население изменено", description=f"{member.mention} {action} **{sign}{amount:,}** чел.", color=color)
-        embed.add_field(name="Было", value=f"{old_population:,} чел.", inline=True)
-        embed.add_field(name="Стало", value=f"{new_population:,} чел.", inline=True)
-        await ctx.send(embed=embed)
-
-    @commands.command(name='happines')
-    @commands.has_permissions(administrator=True)
-    async def happines(self, ctx, member: discord.Member, percent: float):
-        """Установить недовольство игроку (0-100)"""
-        if percent < 0 or percent > 100:
-            await ctx.send("❌ Процент недовольства должен быть от 0 до 100."); return
-        current_time = datetime.now().timestamp()
-        await update_user(member.id, {
-            'unhappiness': percent,
-            'last_unhappiness_update': current_time
-        })
-        embed = discord.Embed(title="😡 Недовольство изменено", description=f"{member.mention} теперь имеет недовольство **{percent:.1f}%**", color=discord.Color.red())
-        await ctx.send(embed=embed)
-
-    @commands.command(name='reg')
-    @commands.has_permissions(administrator=True)
-    async def reg(self, ctx, member: discord.Member, *, country_name: str):
-        """Зарегистрировать страну за игроком (напр. !reg @User Франция)"""
-        await update_user(member.id, {'country': country_name.strip()})
-        reg_role = ctx.guild.get_role(REGISTERED_ROLE_ID)
-        unreg_role = ctx.guild.get_role(UNREGISTERED_ROLE_ID)
-        country_role = ctx.guild.get_role(COUNTRY_ROLE_ID)
-        if reg_role:
-            await member.add_roles(reg_role)
-        if unreg_role:
-            await member.remove_roles(unreg_role)
-        if country_role:
-            await member.add_roles(country_role)
-        await ctx.send(f"✅ Игрок {member.mention} теперь представляет страну **{country_name.strip()}**.")
-
-    @commands.command(name='unreg')
-    @commands.has_permissions(administrator=True)
-    async def unreg(self, ctx, member: discord.Member):
-        """Сбросить всю статистику игрока и снять регистрацию страны"""
-        default_user = {
-            'balance': 0,
-            'gdp': 0,
-            'last_collect': 0,
-            'population': 0,
-            'pop_growth_yearly': 2.0,
-            'last_pop_update': 0,
-            'budget_social': DEFAULT_BUDGETS['budget_social'],
-            'budget_education': DEFAULT_BUDGETS['budget_education'],
-            'budget_healthcare': DEFAULT_BUDGETS['budget_healthcare'],
-            'budget_other': DEFAULT_BUDGETS['budget_other'],
-            'unhappiness': 0.0,
-            'last_unhappiness_update': 0,
-            'country': None,
-            'mobilization_percent': 2.5,
-            'mobilization_used': False,
-            'alliance_id': None,
-            'alliance_role': None,
-        }
-        await update_user(member.id, default_user)
-        await inventory_col.delete_many({'user_id': str(member.id)})
-        await licenses_col.delete_many({'user_id': str(member.id)})
-        reg_role = ctx.guild.get_role(REGISTERED_ROLE_ID)
-        unreg_role = ctx.guild.get_role(UNREGISTERED_ROLE_ID)
-        country_role = ctx.guild.get_role(COUNTRY_ROLE_ID)
-        if reg_role:
-            await member.remove_roles(reg_role)
-        if unreg_role:
-            await member.add_roles(unreg_role)
-        if country_role:
-            await member.remove_roles(country_role)
-        await ctx.send(f"✅ Статистика игрока {member.mention} полностью сброшена, роли обновлены.")
+    async def _build_full_reg_embed(self, member: discord.Member, user: dict) -> discord.Embed:
+        unhappiness = await update_unhappiness(member.id, user)
+        embed = discord.Embed(
+            title=f"👤 Редактирование {member.name}",
+            color=discord.Color.gold()
+        )
+        embed.set_thumbnail(url=user.get('country_flag_url') or member.display_avatar.url)
+        
+        embed.add_field(name="🌍 Страна", value=user.get('country') or "Не установлена", inline=True)
+        embed.add_field(name="💰 Баланс", value=f"{user['balance']:,} 💵", inline=True)
+        embed.add_field(name="📈 ВВП", value=f"{user['gdp']:,} 💵", inline=True)
+        embed.add_field(name="👥 Население", value=f"{user.get('population', 0):,} чел.", inline=True)
+        embed.add_field(name="📊 Рост населения/год", value=f"{user.get('pop_growth_yearly', 2.0):.2f}%", inline=True)
+        embed.add_field(name="😡 Недовольство", value=f"{unhappiness:.2f}%", inline=True)
+        embed.add_field(name="🎖️ Мобилизация", value=f"{user.get('mobilization_percent', 2.5)}%", inline=True)
+        
+        return embed
 
     @commands.command(name='delete-vehicle', aliases=['del-vehicle'])
     @commands.has_permissions(administrator=True)
@@ -1053,24 +976,6 @@ class Admin(commands.Cog, name="👑 Админ"):
         await add_item(member.id, vehicle['name'], quantity)
         await ctx.send(f"✅ {member.mention} получил **{quantity}x {vehicle['name']}**.")
 
-    @commands.command(name='add-money')
-    @commands.has_permissions(administrator=True)
-    async def add_money(self, ctx, member: discord.Member, amount: int):
-        """Выдать деньги на баланс игроку"""
-        if amount <= 0:
-            await ctx.send("❌ Сумма должна быть больше 0.")
-            return
-        user = await get_user(member.id)
-        new_balance = user['balance'] + amount
-        await update_user(member.id, {'balance': new_balance})
-        embed = discord.Embed(
-            title="💰 Деньги выданы",
-            description=f"{member.mention} получил **{amount:,}** 💵",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="Новый баланс", value=f"{new_balance:,} 💵")
-        await ctx.send(embed=embed)
-
     @commands.command(name='remove-sol')
     @commands.has_permissions(administrator=True)
     async def remove_soldiers(self, ctx, member: discord.Member, quantity: int):
@@ -1093,29 +998,6 @@ class Admin(commands.Cog, name="👑 Админ"):
             return
         await add_item(member.id, "Обученный Солдат", quantity)
         await ctx.send(f"✅ {member.mention} получил **{quantity}** обученных солдат.")
-
-    @commands.command(name='priziv-redakt')
-    @commands.has_permissions(administrator=True)
-    async def priziv_redakt(self, ctx, member: discord.Member, percent: float):
-        """Изменить процент мобилизации для игрока (2.5 - 25)"""
-        if percent < 2.5 or percent > 25.0:
-            await ctx.send("❌ Процент должен быть от 2.5 до 25.")
-            return
-        await update_user(member.id, {
-            'mobilization_percent': percent,
-            'mobilization_used': False
-        })
-        embed = discord.Embed(title="⚙️ Лимит мобилизации изменён",
-                              description=f"{member.mention} теперь может мобилизовать до **{percent}%** населения.",
-                              color=discord.Color.green())
-        await ctx.send(embed=embed)
-
-    @commands.command(name='abb-baff')
-    @commands.has_permissions(administrator=True)
-    async def abb_baff(self, ctx, member: discord.Member):
-        """Управление баффами/дебаффами игрока"""
-        view = BuffManageView(member, ctx.author)
-        await ctx.send(f"Управление баффами/дебаффами для {member.mention}", view=view)
 
     @commands.command(name='ally-delete')
     @commands.has_permissions(administrator=True)
@@ -1241,104 +1123,40 @@ class Shop(commands.Cog, name="🛒 Магазин"):
                 embed.add_field(name=name, value=desc, inline=False)
         return embed
 
-    @commands.command(name='add-vehicle', aliases=['add_vehicle'])
+    @commands.command(name='military')
     @is_registered()
-    async def add_vehicle(self, ctx):
-        """Добавить заявку на новую технику в магазин"""
+    async def military(self, ctx):
+        """Панель военных операций (создание техники, модернизация, мобилизация)"""
         user = await get_user(ctx.author.id)
         if not user.get('country'):
-            await ctx.send("❌ У вас не зарегистрирована страна. Используйте `!reg @вы <название>` для регистрации.")
+            await ctx.send("❌ У вас не зарегистрирована страна. Используйте !full-reg для регистрации.")
             return
-
+        
+        # Проверяем кулдауны
         can_submit, msg = await check_daily_submission_limit(ctx.author.id)
-        if not can_submit:
-            await ctx.send(msg)
-            return
-
-        info = await get_daily_submission_info(ctx.author.id)
-        view = StartAddView(self, ctx.author.id, info)
-        await ctx.send(
-            f"Нажмите на кнопку чтобы зарегистрировать технику\n"
-            f"Лимит заявок за день {info}\n"
-            f"КД после отправки 4 часа",
-            view=view
-        )
-
-    @commands.command(name='modernization')
-    @is_registered()
-    async def modernization(self, ctx):
-        """Подать заявку на модернизацию техники (без википедии)"""
-        user = await get_user(ctx.author.id)
-        if not user.get('country'):
-            await ctx.send("❌ У вас не зарегистрирована страна.")
-            return
-        can_submit, msg = await check_daily_submission_limit(ctx.author.id)
-        if not can_submit:
-            await ctx.send(msg)
-            return
-        info = await get_daily_submission_info(ctx.author.id)
+        submission_info = await get_daily_submission_info(ctx.author.id)
+        
+        # Информация о мобилизации
+        population = user.get('population', 0)
+        mob_percent = user.get('mobilization_percent', 2.5)
+        max_mobilizable = int(population * mob_percent / 100) if population > 0 else 0
+        
+        today = datetime.now().strftime('%Y-%m-%d')
+        daily_doc = await daily_mobilization_col.find_one({'user_id': str(ctx.author.id), 'date_str': today})
+        already_mobilized = daily_doc['total'] if daily_doc else 0
+        remaining_daily = max(0, 350_000 - already_mobilized)
+        
         embed = discord.Embed(
-            title="🔧 Модернизация техники",
-            description="Чтобы модернизировать технику, нажмите на кнопку снизу.",
-            color=discord.Color.purple()
+            title="🎖️ Военные операции",
+            description="Выберите действие:",
+            color=discord.Color.red()
         )
-        view = ModernizationStartView(self, ctx.author.id, info)
+        embed.add_field(name="📋 Создание техники", value=f"Статус: {submission_info}", inline=False)
+        embed.add_field(name="🔧 Модернизация", value=f"Статус: {submission_info}", inline=False)
+        embed.add_field(name="👥 Мобилизация", value=f"Доступно: {max_mobilizable:,} / Дневной лимит: {remaining_daily:,}", inline=False)
+        
+        view = MilitaryView(self, ctx.author.id)
         await ctx.send(embed=embed, view=view)
-
-    async def submit_application(self, user_id: int, data: dict):
-        now = datetime.now().timestamp()
-        user = await get_user(user_id)
-        country = user.get('country', '?')
-        vehicle = {
-            "name": data['name'],
-            "description": data['description'],
-            "price": data['price'],
-            "category": data['category'],
-            "country": country,
-            "wiki_link": data.get('wiki_link') if not data.get('is_modernization') else None,
-            "image_url": None,
-            "submitter_id": str(user_id),
-            "approved": False,
-            "created_at": now,
-            "is_modernization": data.get('is_modernization', False),
-        }
-        result = await vehicles_col.insert_one(vehicle)
-        vehicle['_id'] = result.inserted_id
-
-        await record_submission(user_id)
-
-        channel = self.bot.get_channel(self.APPROVAL_CHANNEL)
-        if channel:
-            title = "📥 Новая заявка на технику"
-            if data.get('is_modernization'):
-                title = "📥 Новая заявка на модернизацию"
-            embed = discord.Embed(title=title, color=discord.Color.orange() if not data.get('is_modernization') else discord.Color.purple())
-            embed.add_field(name="Название", value=data['name'], inline=False)
-            embed.add_field(name="Описание", value=data['description'], inline=False)
-            embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
-            embed.add_field(name="Категория", value=data['category'], inline=True)
-            embed.add_field(name="Страна", value=country, inline=True)
-            if data.get('wiki_link'):
-                embed.add_field(name="Википедия", value=data['wiki_link'], inline=False)
-            embed.set_footer(text=f"Отправитель: {self.bot.get_user(user_id)}")
-            view = ApprovalView(self, vehicle['_id'])
-            await channel.send(embed=embed, view=view)
-
-    async def approve_vehicle(self, vehicle_id, moderator: discord.Member):
-        await vehicles_col.update_one({'_id': vehicle_id}, {'$set': {'approved': True, 'approved_by': str(moderator.id)}})
-        vehicle = await vehicles_col.find_one({'_id': vehicle_id})
-        submitter = self.bot.get_user(int(vehicle['submitter_id']))
-        if submitter:
-            try: await submitter.send(f"✅ Ваша заявка на технику **{vehicle['name']}** одобрена!")
-            except: pass
-
-    async def reject_vehicle(self, vehicle_id, reason: str, moderator: discord.Member):
-        await vehicles_col.update_one({'_id': vehicle_id}, {'$set': {'approved': False, 'rejection_reason': reason, 'rejected_by': str(moderator.id)}})
-        vehicle = await vehicles_col.find_one({'_id': vehicle_id})
-        submitter = self.bot.get_user(int(vehicle['submitter_id']))
-        if submitter:
-            try: await submitter.send(f"❌ Ваша заявка на технику **{vehicle['name']}** отклонена.\nПричина: {reason}")
-            except: pass
 
     @commands.command(name='give-lic')
     @is_registered()
@@ -1554,43 +1372,60 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             view = IsoSelectView(ctx.author.id, vehicles, select, image_url, self)
             await ctx.send("Выберите технику, для которой нужно установить изображение:", view=view)
 
-    @commands.command(name='mobilization')
-    @is_registered()
-    async def mobilization(self, ctx):
-        """Мобилизовать часть населения в солдат"""
-        user = await get_user(ctx.author.id)
-        population = user.get('population', 0)
-        if population == 0:
-            await ctx.send("❌ У вас нет населения.")
-            return
+    async def submit_application(self, user_id: int, data: dict):
+        now = datetime.now().timestamp()
+        user = await get_user(user_id)
+        country = user.get('country', '?')
+        vehicle = {
+            "name": data['name'],
+            "description": data['description'],
+            "price": data['price'],
+            "category": data['category'],
+            "country": country,
+            "wiki_link": data.get('wiki_link') if not data.get('is_modernization') else None,
+            "image_url": None,
+            "submitter_id": str(user_id),
+            "approved": False,
+            "created_at": now,
+            "is_modernization": data.get('is_modernization', False),
+        }
+        result = await vehicles_col.insert_one(vehicle)
+        vehicle['_id'] = result.inserted_id
 
-        if user.get('mobilization_used', False):
-            await ctx.send("❌ Вы уже мобилизовали население. Обратитесь к администратору для изменения лимита.")
-            return
+        await record_submission(user_id)
 
-        mob_percent = user.get('mobilization_percent', 2.5)
-        max_mobilizable = int(population * mob_percent / 100)
-        if max_mobilizable <= 0:
-            await ctx.send("❌ Недостаточно населения для мобилизации (нужен хотя бы 1 человек).")
-            return
+        channel = self.bot.get_channel(self.APPROVAL_CHANNEL)
+        if channel:
+            title = "📥 Новая заявка на технику"
+            if data.get('is_modernization'):
+                title = "📥 Новая заявка на модернизацию"
+            embed = discord.Embed(title=title, color=discord.Color.orange() if not data.get('is_modernization') else discord.Color.purple())
+            embed.add_field(name="Название", value=data['name'], inline=False)
+            embed.add_field(name="Описание", value=data['description'], inline=False)
+            embed.add_field(name="Стоимость", value=f"{data['price']:,} 💵", inline=True)
+            embed.add_field(name="Категория", value=data['category'], inline=True)
+            embed.add_field(name="Страна", value=country, inline=True)
+            if data.get('wiki_link'):
+                embed.add_field(name="Википедия", value=data['wiki_link'], inline=False)
+            embed.set_footer(text=f"Отправитель: {self.bot.get_user(user_id)}")
+            view = ApprovalView(self, vehicle['_id'])
+            await channel.send(embed=embed, view=view)
 
-        today = datetime.now().strftime('%Y-%m-%d')
-        daily_doc = await daily_mobilization_col.find_one({'user_id': str(ctx.author.id), 'date_str': today})
-        already_mobilized = daily_doc['total'] if daily_doc else 0
-        remaining_daily = max(0, 350_000 - already_mobilized)
-        if remaining_daily == 0:
-            await ctx.send("❌ Дневной лимит мобилизации (350,000) уже исчерпан.")
-            return
+    async def approve_vehicle(self, vehicle_id, moderator: discord.Member):
+        await vehicles_col.update_one({'_id': vehicle_id}, {'$set': {'approved': True, 'approved_by': str(moderator.id)}})
+        vehicle = await vehicles_col.find_one({'_id': vehicle_id})
+        submitter = self.bot.get_user(int(vehicle['submitter_id']))
+        if submitter:
+            try: await submitter.send(f"✅ Ваша заявка на технику **{vehicle['name']}** одобрена!")
+            except: pass
 
-        embed = discord.Embed(
-            title="📯 Мобилизация",
-            description=f"Текущее население: **{population:,}**\n"
-                        f"Можно мобилизовать до **{max_mobilizable:,}** ({mob_percent}%)\n"
-                        f"Дневной лимит: уже мобилизовано **{already_mobilized:,}** / 350,000",
-            color=discord.Color.orange()
-        )
-        view = MobilizationView(ctx.author.id, max_mobilizable, remaining_daily, self)
-        await ctx.send(embed=embed, view=view)
+    async def reject_vehicle(self, vehicle_id, reason: str, moderator: discord.Member):
+        await vehicles_col.update_one({'_id': vehicle_id}, {'$set': {'approved': False, 'rejection_reason': reason, 'rejected_by': str(moderator.id)}})
+        vehicle = await vehicles_col.find_one({'_id': vehicle_id})
+        submitter = self.bot.get_user(int(vehicle['submitter_id']))
+        if submitter:
+            try: await submitter.send(f"❌ Ваша заявка на технику **{vehicle['name']}** отклонена.\nПричина: {reason}")
+            except: pass
 
     async def perform_mobilization(self, interaction: discord.Interaction, user_id: int, quantity: int, message_link: str):
         pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
@@ -1980,27 +1815,54 @@ class PageButton(discord.ui.Button):
             self.view.current_page = new_page
         await self.view.update_message(interaction)
 
-# ========== UI ДЛЯ ДОБАВЛЕНИЯ ТЕХНИКИ ==========
-class StartAddView(View):
-    def __init__(self, cog: Shop, user_id: int, limit_info: str):
+# ========== UI ДЛЯ ВОЕННЫХ ОПЕРАЦИЙ ==========
+class MilitaryView(View):
+    def __init__(self, cog: Shop, user_id: int):
         super().__init__(timeout=120)
         self.cog = cog
         self.user_id = user_id
-        self.limit_info = limit_info
-    @button(label="Заполнить заявку", style=discord.ButtonStyle.primary)
-    async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(VehicleInfoModal(self.cog, self.user_id))
 
-class ModernizationStartView(View):
-    def __init__(self, cog: Shop, user_id: int, limit_info: str):
-        super().__init__(timeout=120)
-        self.cog = cog
-        self.user_id = user_id
-        self.limit_info = limit_info
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.user_id
 
-    @button(label="Модернизировать технику", style=discord.ButtonStyle.primary)
-    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(ModernizationModal(self.cog, self.user_id))
+    @button(label="Создать Технику", style=discord.ButtonStyle.primary)
+    async def create_vehicle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = VehicleInfoModal(self.cog, self.user_id)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Модернизировать Технику", style=discord.ButtonStyle.primary)
+    async def modernize_vehicle(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = ModernizationModal(self.cog, self.user_id)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Мобилизовать Население", style=discord.ButtonStyle.danger)
+    async def mobilize_population(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user = await get_user(self.user_id)
+        population = user.get('population', 0)
+        if population == 0:
+            await interaction.response.send_message("❌ У вас нет населения.", ephemeral=True)
+            return
+
+        if user.get('mobilization_used', False):
+            await interaction.response.send_message("❌ Вы уже мобилизовали население. Обратитесь к администратору для изменения лимита.", ephemeral=True)
+            return
+
+        mob_percent = user.get('mobilization_percent', 2.5)
+        max_mobilizable = int(population * mob_percent / 100)
+        if max_mobilizable <= 0:
+            await interaction.response.send_message("❌ Недостаточно населения для мобилизации (нужен хотя бы 1 человек).", ephemeral=True)
+            return
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        daily_doc = await daily_mobilization_col.find_one({'user_id': str(self.user_id), 'date_str': today})
+        already_mobilized = daily_doc['total'] if daily_doc else 0
+        remaining_daily = max(0, 350_000 - already_mobilized)
+        if remaining_daily == 0:
+            await interaction.response.send_message("❌ Дневной лимит мобилизации (350,000) уже исчерпан.", ephemeral=True)
+            return
+
+        modal = MobilizationModal(max_mobilizable, remaining_daily, self.cog)
+        await interaction.response.send_modal(modal)
 
 class VehicleInfoModal(Modal, title="Заполните данные техники"):
     name = TextInput(label="Название", placeholder="Т-90", max_length=80)
@@ -2056,6 +1918,25 @@ class ModernizationModal(Modal, title="Данные модернизации"):
         }
         view = CategorySelectView(self.cog, self.user_id)
         await interaction.response.send_message("Выберите категорию:", view=view, ephemeral=True)
+
+class MobilizationModal(Modal, title="Мобилизация населения"):
+    qty = TextInput(label="Количество солдат", placeholder="Введите число", max_length=10)
+    link = TextInput(label="Ссылка на сообщение в канале реформ", placeholder="https://discord.com/channels/...", max_length=200)
+
+    def __init__(self, max_mobilizable, remaining_daily, cog):
+        super().__init__()
+        self.max_mobilizable = max_mobilizable
+        self.remaining_daily = remaining_daily
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qty = int(self.qty.value)
+        except ValueError:
+            await interaction.response.send_message("❌ Количество должно быть числом.", ephemeral=True)
+            return
+        result = await self.cog.perform_mobilization(interaction, interaction.user.id, qty, self.link.value.strip())
+        await interaction.response.send_message(result, ephemeral=True)
 
 class CategorySelectView(View):
     def __init__(self, cog: Shop, user_id: int):
@@ -2149,6 +2030,320 @@ class RejectionModal(Modal, title="Причина отклонения"):
         embed.set_footer(text=f"Отклонено модератором: {self.moderator}")
         await self.message.edit(embed=embed, view=None)
         await interaction.response.send_message("❌ Заявка отклонена.", ephemeral=True, delete_after=3)
+
+# ========== FULL-REG UI ==========
+class FullRegView(View):
+    def __init__(self, admin_cog: Admin, member_id: int, user_data: dict):
+        super().__init__(timeout=600)
+        self.admin_cog = admin_cog
+        self.member_id = member_id
+        self.user_data = user_data
+
+    @button(label="Редактировать Страну", style=discord.ButtonStyle.primary)
+    async def edit_country(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditCountryModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Редактировать Флаг", style=discord.ButtonStyle.primary)
+    async def edit_flag(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditFlagModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Редактировать Баланс", style=discord.ButtonStyle.success)
+    async def edit_balance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditBalanceModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Редактировать ВВП", style=discord.ButtonStyle.success)
+    async def edit_gdp(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditGDPModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Редактировать Население", style=discord.ButtonStyle.success)
+    async def edit_population(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditPopulationModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Редактировать Недовольство", style=discord.ButtonStyle.danger)
+    async def edit_unhappiness(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditUnhappinessModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Редактировать Рост Населения", style=discord.ButtonStyle.secondary)
+    async def edit_growth(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditGrowthModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Редактировать Баффы/Дебаффы", style=discord.ButtonStyle.secondary)
+    async def edit_buffs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        member = self.admin_cog.bot.get_user(self.member_id)
+        if not member:
+            member = await self.admin_cog.bot.fetch_user(self.member_id)
+        admin = interaction.user
+        view = BuffManageView(member, admin)
+        await interaction.response.send_message(f"Управление баффами/дебаффами для {member.mention}", view=view, ephemeral=True)
+
+    @button(label="Редактировать Мобилизацию", style=discord.ButtonStyle.secondary)
+    async def edit_mobilization(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditMobilizationModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Анрегнуть Игрока", style=discord.ButtonStyle.danger)
+    async def unreg_player(self, interaction: discord.Interaction, button: discord.ui.Button):
+        member = self.admin_cog.bot.get_user(self.member_id)
+        if not member:
+            member = await self.admin_cog.bot.fetch_user(self.member_id)
+        
+        default_user = {
+            'balance': 0,
+            'gdp': 0,
+            'last_collect': 0,
+            'population': 0,
+            'pop_growth_yearly': 2.0,
+            'last_pop_update': 0,
+            'budget_social': DEFAULT_BUDGETS['budget_social'],
+            'budget_education': DEFAULT_BUDGETS['budget_education'],
+            'budget_healthcare': DEFAULT_BUDGETS['budget_healthcare'],
+            'budget_other': DEFAULT_BUDGETS['budget_other'],
+            'unhappiness': 0.0,
+            'last_unhappiness_update': 0,
+            'country': None,
+            'country_flag_url': None,
+            'mobilization_percent': 2.5,
+            'mobilization_used': False,
+            'alliance_id': None,
+            'alliance_role': None,
+        }
+        await update_user(self.member_id, default_user)
+        await inventory_col.delete_many({'user_id': str(self.member_id)})
+        await licenses_col.delete_many({'user_id': str(self.member_id)})
+        
+        # Удаляем роли
+        guild = interaction.guild
+        reg_role = guild.get_role(REGISTERED_ROLE_ID)
+        unreg_role = guild.get_role(UNREGISTERED_ROLE_ID)
+        country_role = guild.get_role(COUNTRY_ROLE_ID)
+        role1 = guild.get_role(1149997878828351539)
+        role2 = guild.get_role(1504245939521720523)
+        role3 = guild.get_role(1187496360459649054)
+        
+        if reg_role:
+            await member.remove_roles(reg_role)
+        if country_role:
+            await member.remove_roles(country_role)
+        if role1:
+            await member.remove_roles(role1)
+        if role2:
+            await member.remove_roles(role2)
+        if role3:
+            await member.remove_roles(role3)
+        if unreg_role:
+            await member.add_roles(unreg_role)
+        
+        await interaction.response.send_message(f"✅ Игрок {member.mention} полностью анрегнут.", ephemeral=True)
+
+    @button(label="Закончить Редактирование", style=discord.ButtonStyle.success)
+    async def finish_edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        member = self.admin_cog.bot.get_user(self.member_id)
+        if not member:
+            member = await self.admin_cog.bot.fetch_user(self.member_id)
+        
+        user = await get_user(self.member_id)
+        embed = await self.admin_cog._build_full_reg_embed(member, user)
+        await interaction.response.send_message(f"✅ Редактирование {member.mention} завершено.", ephemeral=True)
+
+class EditCountryModal(Modal, title="Редактировать Страну"):
+    country_name = TextInput(label="Название страны", placeholder="Франция", max_length=100)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await update_user(self.member_id, {'country': self.country_name.value.strip()})
+        await interaction.response.send_message(f"✅ Страна изменена на **{self.country_name.value.strip()}**", ephemeral=True)
+
+class EditFlagModal(Modal, title="Редактировать Флаг"):
+    flag_url = TextInput(label="Ссылка на изображение флага", placeholder="https://...", max_length=500)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        await update_user(self.member_id, {'country_flag_url': self.flag_url.value.strip()})
+        await interaction.response.send_message("✅ Флаг обновлен", ephemeral=True)
+
+class EditBalanceModal(Modal, title="Редактировать Баланс"):
+    new_balance = TextInput(label="Новый баланс (или пусто)", placeholder="1000000", max_length=20, required=False)
+    add_balance = TextInput(label="Добавить/Вычесть (или пусто)", placeholder="+500000 или -300000", max_length=20, required=False)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        user = await get_user(self.member_id)
+        
+        if self.new_balance.value:
+            try:
+                amount = int(self.new_balance.value.replace(',', '').replace(' ', ''))
+                await update_user(self.member_id, {'balance': amount})
+                await interaction.response.send_message(f"✅ Баланс установлен на **{amount:,}** 💵", ephemeral=True)
+            except ValueError:
+                await interaction.response.send_message("❌ Неверное значение", ephemeral=True)
+        elif self.add_balance.value:
+            try:
+                amount = int(self.add_balance.value.replace(',', '').replace(' ', ''))
+                new_balance = user['balance'] + amount
+                await update_user(self.member_id, {'balance': new_balance})
+                await interaction.response.send_message(f"✅ Баланс изменен на {amount:+,} 💵. Новый баланс: **{new_balance:,}** 💵", ephemeral=True)
+            except ValueError:
+                await interaction.response.send_message("❌ Неверное значение", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Заполните хотя бы одно поле", ephemeral=True)
+
+class EditGDPModal(Modal, title="Редактировать ВВП"):
+    new_gdp = TextInput(label="Новый ВВП (или пусто)", placeholder="100000000000", max_length=20, required=False)
+    add_gdp = TextInput(label="Добавить/Вычесть (или пусто)", placeholder="+50000000000", max_length=20, required=False)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        user = await get_user(self.member_id)
+        
+        if self.new_gdp.value:
+            try:
+                amount = int(self.new_gdp.value.replace(',', '').replace(' ', ''))
+                await update_user(self.member_id, {'gdp': amount})
+                await interaction.response.send_message(f"✅ ВВП установлен на **{amount:,}** 💵", ephemeral=True)
+            except ValueError:
+                await interaction.response.send_message("❌ Неверное значение", ephemeral=True)
+        elif self.add_gdp.value:
+            try:
+                amount = int(self.add_gdp.value.replace(',', '').replace(' ', ''))
+                new_gdp = user['gdp'] + amount
+                await update_user(self.member_id, {'gdp': new_gdp})
+                await interaction.response.send_message(f"✅ ВВП изменен на {amount:+,} 💵. Новое ВВП: **{new_gdp:,}** 💵", ephemeral=True)
+            except ValueError:
+                await interaction.response.send_message("❌ Неверное значение", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Заполните хотя бы одно поле", ephemeral=True)
+
+class EditPopulationModal(Modal, title="Редактировать Население"):
+    new_pop = TextInput(label="Новое население (или пусто)", placeholder="1000000", max_length=20, required=False)
+    add_pop = TextInput(label="Добавить/Вычесть (или пусто)", placeholder="+500000", max_length=20, required=False)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        user = await get_user(self.member_id)
+        
+        if self.new_pop.value:
+            try:
+                amount = int(self.new_pop.value.replace(',', '').replace(' ', ''))
+                if amount < 0:
+                    await interaction.response.send_message("❌ Население не может быть отрицательным", ephemeral=True)
+                    return
+                current_time = datetime.now().timestamp()
+                update_data = {'population': amount}
+                if amount > 0 and user.get('population', 0) == 0:
+                    update_data['last_pop_update'] = current_time
+                elif amount == 0:
+                    update_data['last_pop_update'] = 0
+                await update_user(self.member_id, update_data)
+                await interaction.response.send_message(f"✅ Население установлено на **{amount:,}** чел.", ephemeral=True)
+            except ValueError:
+                await interaction.response.send_message("❌ Неверное значение", ephemeral=True)
+        elif self.add_pop.value:
+            try:
+                amount = int(self.add_pop.value.replace(',', '').replace(' ', ''))
+                new_pop = user.get('population', 0) + amount
+                if new_pop < 0:
+                    await interaction.response.send_message("❌ Население не может быть отрицательным", ephemeral=True)
+                    return
+                current_time = datetime.now().timestamp()
+                update_data = {'population': new_pop}
+                if new_pop > 0 and user.get('population', 0) == 0:
+                    update_data['last_pop_update'] = current_time
+                elif new_pop == 0:
+                    update_data['last_pop_update'] = 0
+                await update_user(self.member_id, update_data)
+                await interaction.response.send_message(f"✅ Население изменено на {amount:+,} чел. Новое население: **{new_pop:,}** чел.", ephemeral=True)
+            except ValueError:
+                await interaction.response.send_message("❌ Неверное значение", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ Заполните хотя бы одно поле", ephemeral=True)
+
+class EditUnhappinessModal(Modal, title="Редактировать Недовольство"):
+    unhappiness = TextInput(label="Процент недовольства (0-100)", placeholder="50", max_length=3)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            percent = float(self.unhappiness.value)
+            if not (0 <= percent <= 100):
+                raise ValueError
+            current_time = datetime.now().timestamp()
+            await update_user(self.member_id, {
+                'unhappiness': percent,
+                'last_unhappiness_update': current_time
+            })
+            await interaction.response.send_message(f"✅ Недовольство установлено на **{percent:.2f}%**", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("❌ Процент должен быть от 0 до 100", ephemeral=True)
+
+class EditGrowthModal(Modal, title="Редактировать Рост Населения"):
+    growth = TextInput(label="Процент роста в год (1-100)", placeholder="2.5", max_length=5)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            percent = float(self.growth.value)
+            if not (1 <= percent <= 100):
+                raise ValueError
+            await update_user(self.member_id, {'pop_growth_yearly': percent})
+            await interaction.response.send_message(f"✅ Рост населения установлен на **{percent:.2f}%** в год", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("❌ Процент должен быть от 1 до 100", ephemeral=True)
+
+class EditMobilizationModal(Modal, title="Редактировать Мобилизацию"):
+    mobilization = TextInput(label="Процент мобилизации (2.5-25)", placeholder="5", max_length=5)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            percent = float(self.mobilization.value)
+            if not (2.5 <= percent <= 25.0):
+                raise ValueError
+            await update_user(self.member_id, {
+                'mobilization_percent': percent,
+                'mobilization_used': False
+            })
+            await interaction.response.send_message(f"✅ Процент мобилизации установлен на **{percent}%**", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("❌ Процент должен быть от 2.5 до 25", ephemeral=True)
 
 # ========== ДОПОЛНИТЕЛЬНЫЕ VIEW ==========
 class VehicleInfoSelectView(View):
@@ -2421,43 +2616,7 @@ class TopSelectView(View):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.ctx.author.id
 
-# ========== UI ДЛЯ МОБИЛИЗАЦИИ ==========
-class MobilizationView(View):
-    def __init__(self, user_id: int, max_mobilizable: int, remaining_daily: int, cog: Shop):
-        super().__init__(timeout=120)
-        self.user_id = user_id
-        self.max_mobilizable = max_mobilizable
-        self.remaining_daily = remaining_daily
-        self.cog = cog
-
-    @button(label="Мобилизовать население", style=discord.ButtonStyle.primary)
-    async def mobilize_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("Это не ваше меню.", ephemeral=True)
-            return
-        modal = MobilizationModal(self.max_mobilizable, self.remaining_daily, self.cog)
-        await interaction.response.send_modal(modal)
-
-class MobilizationModal(Modal, title="Мобилизация населения"):
-    qty = TextInput(label="Количество солдат", placeholder="Введите число", max_length=10)
-    link = TextInput(label="Ссылка на сообщение в канале реформ", placeholder="https://discord.com/channels/...", max_length=200)
-
-    def __init__(self, max_mobilizable, remaining_daily, cog):
-        super().__init__()
-        self.max_mobilizable = max_mobilizable
-        self.remaining_daily = remaining_daily
-        self.cog = cog
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            qty = int(self.qty.value)
-        except ValueError:
-            await interaction.response.send_message("❌ Количество должно быть числом.", ephemeral=True)
-            return
-        result = await self.cog.perform_mobilization(interaction, interaction.user.id, qty, self.link.value.strip())
-        await interaction.response.send_message(result, ephemeral=True)
-
-# ========== UI Баффов/Дебаффов ==========
+# ========== Баффы/Дебаффы ==========
 async def get_buffs(user_id: int) -> list:
     cursor = buffs_col.find({'user_id': str(user_id)})
     return await cursor.to_list(length=100)
