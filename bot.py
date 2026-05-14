@@ -602,7 +602,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
             await ctx.send("❌ Сумма должна быть больше 0!")
             return
 
-        pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
+        pattern = r"https://discord.com/channels/\d+/(\d+)/(\d+)"
         match = re.match(pattern, message_link)
         if not match:
             await ctx.send("❌ Неверный формат ссылки. Ожидается ссылка на сообщение Discord.")
