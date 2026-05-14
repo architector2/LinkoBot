@@ -2128,7 +2128,7 @@ class FullRegView(View):
         modal = EditMobilizationModal(self.member_id, self.admin_cog)
         await interaction.response.send_modal(modal)
 
-   @button(label="Анрегнуть Игрока", style=discord.ButtonStyle.danger)
+    @button(label="Анрегнуть Игрока", style=discord.ButtonStyle.danger)
     async def unreg_player(self, interaction: discord.Interaction, button: discord.ui.Button):
         member = self.admin_cog.bot.get_user(self.member_id)
         if not member:
@@ -2157,7 +2157,6 @@ class FullRegView(View):
         await update_user(self.member_id, default_user)
         await inventory_col.delete_many({'user_id': str(self.member_id)})
         await licenses_col.delete_many({'user_id': str(self.member_id)})
-        await buffs_col.delete_many({'user_id': str(self.member_id)})  # Удаляем все баффы и дебаффы
         
         # Удаляем роли
         guild = interaction.guild
@@ -2182,6 +2181,17 @@ class FullRegView(View):
             await member.add_roles(unreg_role)
         
         await interaction.response.send_message(f"✅ Игрок {member.mention} полностью анрегнут.", ephemeral=True)
+
+    @button(label="Закончить Редактирование", style=discord.ButtonStyle.success)
+    async def finish_edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        member = self.admin_cog.bot.get_user(self.member_id)
+        if not member:
+            member = await self.admin_cog.bot.fetch_user(self.member_id)
+        
+        user = await get_user(self.member_id)
+        embed = await self.admin_cog._build_full_reg_embed(member, user)
+        await interaction.response.send_message(f"✅ Редактирование {member.mention} завершено.", ephemeral=True)
+
 class EditCountryModal(Modal, title="Редактировать Страну"):
     country_name = TextInput(label="Название страны", placeholder="Франция", max_length=100)
     
