@@ -113,6 +113,7 @@ async def get_user(user_id: int) -> dict:
             'mobilization_used': False,
             'alliance_id': None,
             'alliance_role': None,
+            'ideology': 'Не указана',
         }
         await economy_col.insert_one(user)
     else:
@@ -142,6 +143,8 @@ async def get_user(user_id: int) -> dict:
             update['alliance_id'] = None
         if 'alliance_role' not in user:
             update['alliance_role'] = None
+        if 'ideology' not in user:
+            update['ideology'] = 'Не указана'
         if update:
             await economy_col.update_one({'_id': str(user_id)}, {'$set': update})
             user.update(update)
@@ -344,6 +347,7 @@ USAGE_HINTS = {
     'ally-delete': '❌ Команда `!ally-delete` не требует аргументов (админ).',
     'iso-ally': '❌ Использование: `!iso-ally <название альянса> <ссылка на изображение>`',
     'edit-buy': '❌ Использование: `!edit-buy <название/часть названия> <новая стоимость>`\nПример: `!edit-buy Т-90 6000000`',
+    'set-ideology': '❌ Использование: `!set-ideology <текст идеологии>`\nПример: `!set-ideology Демократия, свобода и справедливость`\nМаксимум 200 символов.\nДля просмотра текущей идеологии введите: `!set-ideology` без аргументов',
 }
 
 @bot.event
@@ -778,6 +782,9 @@ class Economy(commands.Cog, name="💰 Экономика"):
         speed_str = f"{unhappiness_speed:+.2f}%/ч" if unhappiness_speed else "0%/ч"
         unhappiness_block = f"😡 **{unhappiness:.2f}%**\n({speed_str})"
         embed.add_field(name="🗳️ Недовольство", value=unhappiness_block, inline=False)
+        # Идеология
+        ideology = user.get('ideology', 'Не указана')
+        embed.add_field(name="🎭 Идеология", value=f"**{ideology}**", inline=False)
 
         # Баффы/дебаффы
         buffs = await get_buffs(member.id)
@@ -792,6 +799,46 @@ class Economy(commands.Cog, name="💰 Экономика"):
             embed.add_field(name="🏛️ Альянс", value=f"**{alliance['name']}**\nНалог: {alliance.get('tax_percent', 2)}%", inline=False)
 
         await ctx.send(embed=embed)
+
+    @commands.command(name='set-ideology', aliases=['ideology'])
+    @is_registered()
+    async def set_ideology(self, ctx, *, ideology_text: str = None):
+        "\"\"Установить свою идеологию (до 200 символов) или посмотреть текущую\"\"\""
+        if ideology_text is None:
+            user = await get_user(ctx.author.id)
+            current = user.get('ideology', 'Не указана')
+            embed = discord.Embed(
+                title="🎭 Ваша идеология",
+                description=f"**{current}**",
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text="Используйте !set-ideology <текст> для изменения")
+            await ctx.send(embed=embed)
+            return
+        
+        ideology_clean = ideology_text.strip()
+        if len(ideology_clean) == 0:
+            await ctx.send("❌ Текст идеологии не может быть пустым!")
+            return
+        
+        if len(ideology_clean) > 200:
+            await ctx.send("❌ Текст идеологии не может быть длиннее 200 символов!")
+            return
+        
+        user = await get_user(ctx.author.id)
+        old_ideology = user.get('ideology', 'Не указана')
+        
+        await update_user(ctx.author.id, {'ideology': ideology_clean})
+        
+        embed = discord.Embed(
+            title="🎭 Идеология изменена",
+            color=discord.Color.blue()
+        )
+        if old_ideology != ideology_clean:
+            embed.add_field(name="Была", value=f"**{old_ideology}**", inline=True)
+            embed.add_field(name="Стала", value=f"**{ideology_clean}**", inline=True)
+        await ctx.send(embed=embed)
+
 
 # ===========================
 # 📊 COG: БЮДЖЕТ
@@ -912,6 +959,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         embed.add_field(name="📊 Рост населения/год", value=f"{user.get('pop_growth_yearly', 2.0):.2f}%", inline=True)
         embed.add_field(name="😡 Недовольство", value=f"{unhappiness:.2f}%", inline=True)
         embed.add_field(name="🎖️ Мобилизация", value=f"{user.get('mobilization_percent', 2.5)}%", inline=True)
+        embed.add_field(name="🎭 Идеология", value=user.get('ideology', 'Не указана'), inline=True)
         
         return embed
 
@@ -2122,6 +2170,10 @@ class FullRegView(View):
         admin = interaction.user
         view = BuffManageView(member, admin)
         await interaction.response.send_message(f"Управление баффами/дебаффами для {member.mention}", view=view, ephemeral=True)
+    @button(label="Редактировать Идеологию", style=discord.ButtonStyle.secondary)
+    async def edit_ideology(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditIdeologyModal(self.member_id, self.admin_cog)
+        await interaction.response.send_modal(modal)
 
     @button(label="Редактировать Мобилизацию", style=discord.ButtonStyle.secondary)
     async def edit_mobilization(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2363,7 +2415,21 @@ class EditGrowthModal(Modal, title="Редактировать Рост Насе
             await interaction.response.send_message(f"✅ Рост населения установлен на **{percent:.2f}%** в год", ephemeral=True)
         except ValueError:
             await interaction.response.send_message("❌ Процент должен быть от 1 до 100", ephemeral=True)
-
+class EditIdeologyModal(Modal, title="Редактировать Идеологию"):
+    ideology = TextInput(label="Идеология (макс 200 символов)", placeholder="Демократия", max_length=200, required=True)
+    
+    def __init__(self, member_id: int, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        ideology_text = self.ideology.value.strip()
+        if not ideology_text:
+            await interaction.response.send_message("❌ Идеология не может быть пустой", ephemeral=True)
+            return
+        await update_user(self.member_id, {'ideology': ideology_text})
+        await interaction.response.send_message(f"✅ Идеология установлена на **{ideology_text}**", ephemeral=True)
 class EditMobilizationModal(Modal, title="Редактировать Мобилизацию"):
     mobilization = TextInput(label="Процент мобилизации (2.5-25)", placeholder="5", max_length=5)
     
