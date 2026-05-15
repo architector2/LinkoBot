@@ -418,7 +418,7 @@ class General(commands.Cog, name="⚙️ Основные"):
     @is_registered()
     async def players_country(self, ctx):
         """Показать список игроков по государствам и других"""
-        view = PlayersCountryView(ctx.guild, ctx.author.id)   # передаём id автора
+        view = PlayersCountryView(ctx.guild, ctx.author.id)
         embed = await view.build_embed('states')
         view.message = await ctx.send(embed=embed, view=view)
 
@@ -452,16 +452,17 @@ class Economy(commands.Cog, name="💰 Экономика"):
         gross_income = int(income_per_hour * hours_passed)
 
         # Применяем баффы/дебаффы
-        await buffs_col.delete_many({'user_id': str(ctx.author.id), 'expires_at': {'$lt': current_time}})  # fix: current_time
+        await buffs_col.delete_many({'user_id': str(ctx.author.id), 'expires_at': {'$lt': current_time}})
         buffs = await buffs_col.find({'user_id': str(ctx.author.id)}).to_list(length=100)
-        total_buff_percent = 0
-        for b in buffs:
-            if b['type'] == 'buff':
-                total_buff_percent += b['percent']
-            else:  # debuff
-                total_buff_percent -= b['percent']
-        if total_buff_percent != 0:
-            gross_income = int(gross_income * (1 + total_buff_percent / 100))
+
+        buff_list = [b for b in buffs if b['type'] == 'buff']
+        debuff_list = [b for b in buffs if b['type'] == 'debuff']
+
+        sum_buff_percent = sum(b['percent'] for b in buff_list)
+        sum_debuff_percent = sum(b['percent'] for b in debuff_list)  # положительные числа
+
+        buff_amount = int(gross_income * sum_buff_percent / 100)
+        debuff_amount = int(gross_income * sum_debuff_percent / 100)
 
         # Бюджетные вычеты
         budget_social = user.get('budget_social', DEFAULT_BUDGETS['budget_social'])
@@ -504,7 +505,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 {'$inc': {'treasury': alliance_tax}}
             )
 
-        net_income = gross_income - total_budget_deduct - vehicle_cost - soldier_cost - alliance_tax
+        net_income = gross_income + buff_amount - debuff_amount - total_budget_deduct - vehicle_cost - soldier_cost - alliance_tax
         new_balance = user['balance'] + net_income
 
         # Прирост населения
@@ -546,8 +547,11 @@ class Economy(commands.Cog, name="💰 Экономика"):
         embed.add_field(name="Доход в час", value=f"{income_per_hour:,.0f} 💵", inline=True)
         embed.add_field(name="Валовый доход", value=f"{gross_income:,} 💵", inline=False)
 
-        if total_buff_percent != 0:
-            embed.add_field(name="🔥 Баффы/Дебаффы", value=f"{'+' if total_buff_percent > 0 else ''}{total_buff_percent}%", inline=False)
+        if buff_list or debuff_list:
+            if sum_buff_percent > 0:
+                embed.add_field(name="🔼 Баффы", value=f"+{sum_buff_percent}% (+{buff_amount:,} 💵)", inline=True)
+            if sum_debuff_percent > 0:
+                embed.add_field(name="🔽 Дебаффы", value=f"-{sum_debuff_percent}% (-{debuff_amount:,} 💵)", inline=True)
 
         embed.add_field(
             name="Вычеты бюджета",
@@ -773,6 +777,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         buffs = await get_buffs(member.id)
         if buffs:
+            # Показываем общий процент для быстрого взгляда
             total_buff = sum(b['percent'] if b['type']=='buff' else -b['percent'] for b in buffs)
             buff_str = f"{'+' if total_buff > 0 else ''}{total_buff}% к доходу"
             embed.add_field(name="🔥 Баффы/Дебаффы", value=buff_str, inline=False)
@@ -2120,8 +2125,8 @@ class FullRegView(View):
         self.admin_cog = admin_cog
         self.member_id = member_id
         self.user_data = user_data
-        self.author_id = author_id          # тот, кто вызвал !full-reg
-        self.message = None                 # будет установлено после отправки
+        self.author_id = author_id
+        self.message = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.author_id
@@ -2167,8 +2172,9 @@ class FullRegView(View):
         if not member:
             member = await self.admin_cog.bot.fetch_user(self.member_id)
         admin = interaction.user
+        # Создаём новое представление для управления баффами
         view = BuffManageView(member, admin)
-        await interaction.response.send_message(f"Управление баффами/дебаффами для {member.mention}", view=view, ephemeral=True)
+        await interaction.response.send_message(content=await view.build_content(), view=view, ephemeral=True)
 
     @button(label="Редактировать Идеологию", style=discord.ButtonStyle.secondary)
     async def edit_ideology(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2239,11 +2245,9 @@ class FullRegView(View):
         if not member:
             member = await self.admin_cog.bot.fetch_user(self.member_id)
         
-        # Получаем Economy cog, чтобы вызвать build_cab_embed
         economy_cog = self.admin_cog.bot.get_cog("💰 Экономика")
         if economy_cog:
             cab_embed = await economy_cog.build_cab_embed(member)
-            # Редактируем исходное сообщение, убираем view
             await interaction.response.edit_message(embed=cab_embed, view=None)
         else:
             await interaction.response.send_message("✅ Редактирование завершено.", ephemeral=True)
@@ -2737,104 +2741,130 @@ class TopSelectView(View):
         embed = await self.build_embed('balance')
         await interaction.response.edit_message(embed=embed, view=self)
 
-# ========== Баффы/Дебаффы ==========
+# ========== НОВАЯ СИСТЕМА БАФФОВ/ДЕБАФФОВ ==========
 async def get_buffs(user_id: int) -> list:
     cursor = buffs_col.find({'user_id': str(user_id)})
     return await cursor.to_list(length=100)
 
 class BuffManageView(View):
+    """Панель управления баффами/дебаффами для админа"""
     def __init__(self, target: discord.Member, admin: discord.Member):
-        super().__init__(timeout=180)
+        super().__init__(timeout=300)
         self.target = target
         self.admin = admin
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self.admin.id
 
-    @button(label="Дать бафф", style=discord.ButtonStyle.success)
-    async def give_buff(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.admin.id:
-            await interaction.response.send_message("Недоступно.", ephemeral=True)
-            return
-        await interaction.response.send_modal(BuffModal(self.target, 'buff'))
-
-    @button(label="Дать дебафф", style=discord.ButtonStyle.danger)
-    async def give_debuff(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.admin.id:
-            await interaction.response.send_message("Недоступно.", ephemeral=True)
-            return
-        await interaction.response.send_modal(BuffModal(self.target, 'debuff'))
-
-    @button(label="Список Баффов/дебаффов", style=discord.ButtonStyle.primary)
-    async def list_buffs(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.admin.id:
-            await interaction.response.send_message("Недоступно.", ephemeral=True)
-            return
+    async def build_content(self) -> str:
         buffs = await get_buffs(self.target.id)
         if not buffs:
-            await interaction.response.send_message("У игрока нет активных баффов/дебаффов.", ephemeral=True)
+            return "У игрока нет активных баффов/дебаффов."
+        now = datetime.now().timestamp()
+        lines = ["**Активные эффекты:**"]
+        for b in buffs:
+            expires = b.get('expires_at', 0)
+            remaining = max(0, expires - now)
+            hours = int(remaining // 3600)
+            minutes = int((remaining % 3600) // 60)
+            sign = '+' if b['type'] == 'buff' else '-'
+            lines.append(
+                f"{sign}{b['percent']}% — {b.get('name', '?')} "
+                f"(осталось {hours}ч {minutes}м)"
+            )
+        return "\n".join(lines)
+
+    @button(label="Добавить Эффект", style=discord.ButtonStyle.success)
+    async def add_effect(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = BuffModal(self.target)
+        await interaction.response.send_modal(modal)
+
+    @button(label="Удалить Эффекты", style=discord.ButtonStyle.danger)
+    async def delete_effects(self, interaction: discord.Interaction, button: discord.ui.Button):
+        buffs = await get_buffs(self.target.id)
+        if not buffs:
+            await interaction.response.send_message("Нет активных эффектов для удаления.", ephemeral=True)
             return
-        view = BuffListView(self.target, buffs, self.admin)
-        await interaction.response.send_message(f"Активные эффекты {self.target.mention}:", view=view, ephemeral=True)
+        # Создаём select с выбором эффекта
+        options = []
+        for b in buffs:
+            label = f"{'+' if b['type']=='buff' else '-'}{b['percent']}% — {b.get('name','?')}"[:100]
+            options.append(discord.SelectOption(label=label, value=str(b['_id'])))
+        select = Select(placeholder="Выберите эффект для удаления...", options=options)
+        view = BuffDeleteSelectView(self.target, select, self)
+        await interaction.response.send_message("Выберите эффект для удаления:", view=view, ephemeral=True)
 
-class BuffModal(Modal):
-    name = TextInput(label="Название", placeholder="Напр: Экономический подъем", max_length=100)
-    percent = TextInput(label="Процент (число)", placeholder="Напр: 15", max_length=5)
-    duration = TextInput(label="Срок действия (в днях)", placeholder="Напр: 0.5 для 12 часов или 1 для суток", max_length=10)
+class BuffModal(Modal, title="Новый эффект"):
+    percent = TextInput(label="Проценты (от -100 до +100)", placeholder="15 или -10", max_length=5)
+    reason = TextInput(label="Причина (название)", placeholder="Экономический кризис", max_length=100)
+    hours = TextInput(label="Длительность (часы, макс 240)", placeholder="0.5 или 24", max_length=10)
 
-    def __init__(self, target_member, buff_type):
-        super().__init__(title="Выдача баффа" if buff_type == 'buff' else "Выдача дебаффа")
+    def __init__(self, target_member):
+        super().__init__()
         self.target = target_member
-        self.buff_type = buff_type
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
             pct = int(self.percent.value)
-            days = float(self.duration.value.replace(',', '.'))
-            expires_at = datetime.now().timestamp() + (days * 86400)
-            
-            buff_data = {
-                'user_id': str(self.target.id),
-                'name': self.name.value,
-                'percent': pct,
-                'type': self.buff_type,
-                'expires_at': expires_at
-            }
-            await buffs_col.insert_one(buff_data)
-            
+            if not (-100 <= pct <= 100):
+                raise ValueError("Процент вне диапазона")
+            hours = float(self.hours.value.replace(',', '.'))
+            if hours <= 0 or hours > 240:
+                raise ValueError("Некорректная длительность")
+        except Exception:
             await interaction.response.send_message(
-                f"✅ {'Бафф' if self.buff_type == 'buff' else 'Дебафф'} **{self.name.value}** (+{pct}%) "
-                f"выдан игроку {self.target.mention} на {days} дн.", ephemeral=True)
-        except ValueError:
-            await interaction.response.send_message("❌ Ошибка: Процент должен быть целым числом, а срок — числом (напр. 0.5).", ephemeral=True)
+                "❌ Ошибка: Процент должен быть целым числом от -100 до +100, длительность — положительным числом до 240 часов.",
+                ephemeral=True
+            )
+            return
 
-class BuffListView(View):
-    def __init__(self, target: discord.Member, buffs: list, admin: discord.Member):
-        super().__init__(timeout=120)
+        expires_at = datetime.now().timestamp() + hours * 3600
+        btype = 'buff' if pct > 0 else 'debuff'
+        data = {
+            'user_id': str(self.target.id),
+            'name': self.reason.value.strip() or "Без названия",
+            'percent': abs(pct) if pct < 0 else pct,  # храним положительное число
+            'type': btype,
+            'expires_at': expires_at
+        }
+        await buffs_col.insert_one(data)
+
+        # Обновляем основное сообщение BuffManageView
+        # Нужно получить родительское view из interaction.message (оно было отправлено как ephemeral с BuffManageView)
+        # Но мы в модальном окне, у нас нет прямого доступа к тому view.
+        # Можно просто отправить новое сообщение с обновлённым списком, но лучше отредактировать исходное.
+        # Вместо сложной логики мы отправим новое ephemeral сообщение с обновлённым списком.
+        content = await BuffManageView(self.target, interaction.user).build_content()
+        await interaction.response.send_message(f"✅ Эффект добавлен.\n{content}", ephemeral=True)
+
+class BuffDeleteSelectView(View):
+    def __init__(self, target: discord.Member, select: Select, parent_view: BuffManageView):
+        super().__init__(timeout=60)
         self.target = target
-        self.admin = admin
-        for b in buffs:
-            sign = '+' if b['type'] == 'buff' else '-'
-            label = f"{sign}{b['percent']}% - {b['name'][:30]}"  # укороченная причина
-            self.add_item(RemoveBuffButton(b['_id'], label))
+        self.parent_view = parent_view
+        select.callback = self.select_callback
+        self.add_item(select)
 
-class RemoveBuffButton(discord.ui.Button):
-    def __init__(self, buff_id, label):
-        super().__init__(style=discord.ButtonStyle.secondary, label=label)
-        self.buff_id = buff_id
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.parent_view.admin.id
 
-    async def callback(self, interaction: discord.Interaction):
-        result = await buffs_col.delete_one({'_id': self.buff_id})
+    async def select_callback(self, interaction: discord.Interaction):
+        buff_id = interaction.data['values'][0]
+        try:
+            obj_id = ObjectId(buff_id)
+        except:
+            await interaction.response.send_message("❌ Неверный ID эффекта.", ephemeral=True)
+            return
+        result = await buffs_col.delete_one({'_id': obj_id})
         if result.deleted_count:
-            await interaction.response.send_message("✅ Эффект удалён.", ephemeral=True)
-            buffs = await get_buffs(self.view.target.id)
-            if not buffs:
-                await interaction.edit_original_response(view=None, content="Эффекты отсутствуют.")
-                return
-            new_view = BuffListView(self.view.target, buffs, self.view.admin)
-            await interaction.edit_original_response(view=new_view)
+            # Обновляем основное сообщение
+            content = await self.parent_view.build_content()
+            # Получаем оригинальное сообщение BuffManageView
+            # Проблема: мы не храним ссылку на исходное сообщение. Можно сохранить в parent_view.
+            # Простой выход: отправить новое ephemeral сообщение с обновлённым списком.
+            await interaction.response.send_message(f"✅ Эффект удалён.\n{content}", ephemeral=True)
         else:
-            await interaction.response.send_message("❌ Не удалось удалить.", ephemeral=True)
+            await interaction.response.send_message("❌ Не удалось удалить эффект.", ephemeral=True)
 
 # ========== UI ДЛЯ АЛЬЯНСОВ ==========
 class AllyCreateStartView(View):
@@ -3059,7 +3089,7 @@ class AllyKickSelectView(View):
         self.add_item(select)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.view.user_id if hasattr(self.view, 'user_id') else True  # у этого view нет user_id, но он создаётся из AllyInfoView, который имеет проверку
+        return interaction.user.id == self.view.user_id if hasattr(self.view, 'user_id') else True
 
     async def select_callback(self, interaction: discord.Interaction):
         member_id = interaction.data['values'][0]
