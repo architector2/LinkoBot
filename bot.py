@@ -345,6 +345,7 @@ USAGE_HINTS = {
     'iso-ally': '❌ Использование: `!iso-ally <название альянса> <ссылка на изображение>`',
     'edit-buy': '❌ Использование: `!edit-buy <название/часть названия> <новая стоимость>`\nПример: `!edit-buy Т-90 6000000`',
     'set-ideology': '❌ Использование: `!set-ideology <текст идеологии>`\nПример: `!set-ideology Демократия, свобода и справедливость`\nМаксимум 200 символов.\nДля просмотра текущей идеологии введите: `!set-ideology` без аргументов',
+    'sell': '❌ Использование: `!sell <название> <кол-во> @игрок <цена>`\nПример: `!sell Т-90 5 @Undervud 1000000`',
 }
 
 @bot.event
@@ -1217,6 +1218,265 @@ class Shop(commands.Cog, name="🛒 Магазин"):
                 desc = v['description'][:80] + ('...' if len(v['description']) > 80 else '')
                 embed.add_field(name=name, value=desc, inline=False)
         return embed
+@commands.command(name='sell')
+@is_registered()
+async def sell_item(self, ctx, *, args: str):
+    """
+    Продать предмет другому игроку:
+    !sell <название> <количество> @игрок <цена>
+    Пример: !sell Т-90 5 @Undervud 1000000
+    """
+    # --- Парсинг аргументов ---
+    # Ожидаем: название ... количество @упоминание цена
+    # Цена – последнее "слово", которое является целым числом
+    # Упоминание – предпоследняя часть (или где-то в конце)
+    parts = args.split()
+    if len(parts) < 3:
+        await ctx.send("❌ Недостаточно аргументов. Используйте `!sell <название> <кол-во> @игрок <цена>`")
+        return
+
+    # Ищем упоминание в сообщении (ctx.message.mentions)
+    if not ctx.message.mentions:
+        await ctx.send("❌ Укажите игрока (@упоминание), которому хотите продать.")
+        return
+
+    target = ctx.message.mentions[0]
+    if target.bot:
+        await ctx.send("❌ Нельзя продавать ботам!")
+        return
+    if target == ctx.author:
+        await ctx.send("❌ Нельзя продать самому себе!")
+        return
+
+    # Пытаемся извлечь цену (последнее число в строке args)
+    price = None
+    for token in reversed(parts):
+        try:
+            price = int(token.replace(',', '').replace(' ', ''))
+            break
+        except ValueError:
+            continue
+    if price is None or price <= 0:
+        await ctx.send("❌ Укажите положительную цену (целое число) в конце команды.")
+        return
+
+    # Извлекаем количество – слово перед упоминанием (по позиции в строке, а не в tokens)
+    # Упоминание в тексте выглядит как <@id> или <@!id> – найдём его индекс в оригинальном сообщении
+    content = ctx.message.content
+    # Найдём вхождение упоминания
+    mention_str = ctx.message.mentions[0].mention  # <@id>
+    mention_index = content.find(mention_str)
+    if mention_index == -1:
+        await ctx.send("❌ Не удалось найти упоминание в сообщении.")
+        return
+
+    # Всё после команды !sell и пробела
+    command_prefix = f"{ctx.prefix}sell "  # '!sell '
+    after_command = content[len(command_prefix):].lstrip()
+    # Разделим по упоминанию
+    before_mention = after_command[:after_command.find(mention_str)].strip()
+    after_mention = after_command[after_command.find(mention_str)+len(mention_str):].strip()
+
+    # Количество должно быть последним словом в before_mention
+    before_parts = before_mention.split()
+    if not before_parts:
+        await ctx.send("❌ Укажите количество перед @игроком.")
+        return
+    try:
+        quantity = int(before_parts[-1].replace(',', '').replace(' ', ''))
+        # item_name – всё перед количеством
+        item_name = ' '.join(before_parts[:-1]).strip()
+    except ValueError:
+        await ctx.send("❌ Количество должно быть целым числом перед @игроком.")
+        return
+
+    if quantity <= 0:
+        await ctx.send("❌ Количество должно быть больше 0.")
+        return
+    if not item_name:
+        await ctx.send("❌ Укажите название предмета.")
+        return
+
+    # --- Проверка предмета у продавца ---
+    seller_inv = await get_inventory(ctx.author.id)
+    if not seller_inv:
+        await ctx.send("❌ Ваш инвентарь пуст.")
+        return
+
+    # Частичный поиск (как в !use)
+    regex = re.compile(re.escape(item_name), re.IGNORECASE)
+    matches = [it for it in seller_inv if regex.search(it['item_name'])]
+
+    if not matches:
+        await ctx.send("❌ У вас нет предмета с таким названием.")
+        return
+
+    # Если несколько совпадений, создаём выбор
+    if len(matches) > 1:
+        options = [discord.SelectOption(label=it['item_name'][:100]) for it in matches[:25]]
+        select = Select(placeholder="Выберите предмет для продажи...", options=options)
+        view = SellSelectView(ctx.author.id, target.id, quantity, price, matches, select, self)
+        await ctx.send("Найдено несколько предметов. Выберите:", view=view)
+        return
+
+    # Один предмет – сразу запускаем предложение
+    item = matches[0]
+    await self._start_sell_offer(ctx, item, quantity, price, target)
+
+async def _start_sell_offer(self, ctx, item: dict, quantity: int, price: int, buyer: discord.Member):
+    """Создаёт предложение о продаже с кнопками для покупателя."""
+    seller = ctx.author
+
+    # Проверка наличия предмета (на случай, если инвентарь изменился)
+    current_inv = await get_inventory(seller.id)
+    found = next((i for i in current_inv if i['item_name'] == item['item_name']), None)
+    if not found or found['quantity'] < quantity:
+        await ctx.send("❌ У вас больше нет такого количества предмета.")
+        return
+
+    # Проверка баланса покупателя
+    buyer_user = await get_user(buyer.id)
+    if buyer_user['balance'] < price:
+        await ctx.send(f"❌ У {buyer.mention} недостаточно денег. Баланс: {buyer_user['balance']:,} 💵")
+        return
+
+    # Создаём embed предложения
+    embed = discord.Embed(
+        title="💰 Предложение о продаже",
+        description=f"{seller.mention} предлагает {buyer.mention} купить:",
+        color=discord.Color.gold()
+    )
+    embed.add_field(name="Предмет", value=f"**{item['item_name']}** × {quantity}", inline=False)
+    embed.add_field(name="Цена", value=f"**{price:,}** 💵", inline=False)
+    embed.set_footer(text="У вас есть 2 минуты, чтобы принять или отклонить предложение.")
+
+    view = SellOfferConfirmView(seller.id, buyer.id, item['item_name'], quantity, price)
+    msg = await ctx.send(embed=embed, view=view)
+    view.message = msg  # для обновления по таймауту
+
+# --- UI классы для продажи ---
+
+class SellSelectView(View):
+    """Выбор предмета при нескольких совпадениях."""
+    def __init__(self, seller_id: int, buyer_id: int, quantity: int, price: int,
+                 matches: list, select: Select, shop_cog):
+        super().__init__(timeout=60)
+        self.seller_id = seller_id
+        self.buyer_id = buyer_id
+        self.quantity = quantity
+        self.price = price
+        self.matches = matches
+        self.shop_cog = shop_cog
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.seller_id
+
+    async def select_callback(self, interaction: discord.Interaction):
+        selected_name = interaction.data['values'][0]
+        item = next((it for it in self.matches if it['item_name'] == selected_name), None)
+        if not item:
+            await interaction.response.send_message("❌ Предмет не найден.", ephemeral=True)
+            return
+        # Отправляем предложение от имени продавца (interaction.user)
+        # Используем контекст взаимодействия, чтобы получить объект канала
+        channel = interaction.channel
+        # Создаём "фейковый" контекст, чтобы вызвать _start_sell_offer
+        # Проще передать нужные параметры напрямую
+        # Получаем объект buyer
+        guild = interaction.guild
+        buyer = guild.get_member(self.buyer_id)
+        if not buyer:
+            await interaction.response.send_message("❌ Покупатель не найден на сервере.", ephemeral=True)
+            return
+        seller = interaction.user
+        # Удаляем оригинальное сообщение с выбором
+        await interaction.message.delete()
+        # Создаём фиктивный контекст для вызова _start_sell_offer
+        # Вместо ctx используем interaction, но метод требует ctx, поэтому эмулируем
+        # Лучше адаптировать _start_sell_offer, чтобы он принимал interaction или channel+author.
+        # Быстрое решение: вызываем _start_sell_offer с передачей необходимых атрибутов через простой объект.
+        class FakeCtx:
+            def __init__(self, interaction, buyer, seller, channel):
+                self.author = seller
+                self.guild = interaction.guild
+                self.send = channel.send
+        fake_ctx = FakeCtx(interaction, buyer, seller, interaction.channel)
+        await self.shop_cog._start_sell_offer(fake_ctx, item, self.quantity, self.price, buyer)
+        self.stop()
+
+class SellOfferConfirmView(View):
+    """Кнопки для покупателя."""
+    def __init__(self, seller_id: int, buyer_id: int, item_name: str, quantity: int, price: int):
+        super().__init__(timeout=120)  # 2 минуты
+        self.seller_id = seller_id
+        self.buyer_id = buyer_id
+        self.item_name = item_name
+        self.quantity = quantity
+        self.price = price
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.buyer_id
+
+    async def on_timeout(self):
+        if self.message:
+            try:
+                embed = self.message.embeds[0]
+                embed.color = discord.Color.light_grey()
+                embed.set_footer(text="⏰ Время предложения истекло.")
+                await self.message.edit(embed=embed, view=None)
+            except:
+                pass
+
+    @button(label="Принять", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.buyer_id:
+            await interaction.response.send_message("Это предложение не для вас.", ephemeral=True)
+            return
+
+        # Проверки
+        buyer_user = await get_user(self.buyer_id)
+        if buyer_user['balance'] < self.price:
+            await interaction.response.send_message(f"❌ У вас недостаточно денег. Баланс: {buyer_user['balance']:,} 💵", ephemeral=True)
+            return
+
+        # Перемещаем предмет
+        success = await remove_item(self.seller_id, self.item_name, self.quantity)
+        if not success:
+            await interaction.response.send_message("❌ У продавца больше нет этого предмета.", ephemeral=True)
+            return
+
+        await add_item(self.buyer_id, self.item_name, self.quantity)
+
+        # Перевод денег
+        seller_user = await get_user(self.seller_id)
+        await update_user(self.seller_id, {'balance': seller_user['balance'] + self.price})
+        await update_user(self.buyer_id, {'balance': buyer_user['balance'] - self.price})
+
+        # Обновляем сообщение
+        embed = self.message.embeds[0]
+        embed.color = discord.Color.green()
+        embed.set_footer(text="✅ Сделка совершена!")
+        await self.message.edit(embed=embed, view=None)
+
+        await interaction.response.send_message(
+            f"✅ Вы купили **{self.quantity}x {self.item_name}** за **{self.price:,}** 💵.",
+            ephemeral=True
+        )
+
+    @button(label="Отклонить", style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.buyer_id:
+            await interaction.response.send_message("Это предложение не для вас.", ephemeral=True)
+            return
+
+        embed = self.message.embeds[0]
+        embed.color = discord.Color.red()
+        embed.set_footer(text="❌ Предложение отклонено.")
+        await self.message.edit(embed=embed, view=None)
+        await interaction.response.send_message("❌ Вы отклонили предложение.", ephemeral=True)
 
     @commands.command(name='military')
     @is_registered()
