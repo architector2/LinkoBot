@@ -455,6 +455,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         gross_income = int(income_per_hour * hours_passed)
 
         # Применяем баффы/дебаффы
+        await buffs_col.delete_many({'user_id': str(ctx.author.id), 'expires_at': {'$lt': current_ts}})
         buffs = await buffs_col.find({'user_id': str(ctx.author.id)}).to_list(length=100)
         total_buff_percent = 0
         for b in buffs:
@@ -2255,6 +2256,18 @@ class EditCountryModal(Modal, title="Редактировать Страну"):
     async def on_submit(self, interaction: discord.Interaction):
         await update_user(self.member_id, {'country': self.country_name.value.strip()})
         await interaction.response.send_message(f"✅ Страна изменена на **{self.country_name.value.strip()}**", ephemeral=True)
+class EditIdeologyModal(Modal, title="Изменить идеологию"):
+    ideology = TextInput(label="Идеология", placeholder="Напр: Демократия", max_length=200, style=discord.TextStyle.paragraph)
+
+    def __init__(self, member_id, admin_cog):
+        super().__init__()
+        self.member_id = member_id
+        self.admin_cog = admin_cog
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new_ideo = self.ideology.value.strip()
+        await update_user(self.member_id, {'ideology': new_ideo})
+        await interaction.response.send_message(f"✅ Идеология игрока изменена на: `{new_ideo}`", ephemeral=True)
 
 class EditFlagModal(Modal, title="Редактировать Флаг"):
     flag_url = TextInput(label="Ссылка на изображение флага", placeholder="https://...", max_length=500)
@@ -2759,36 +2772,36 @@ class BuffManageView(View):
         view = BuffListView(self.target, buffs, self.admin)
         await interaction.response.send_message(f"Активные эффекты {self.target.mention}:", view=view, ephemeral=True)
 
-class BuffModal(Modal, title="Добавить эффект"):
-    percent = TextInput(label="Процент (1-100)", placeholder="10", max_length=3)
-    reason = TextInput(label="Причина", style=discord.TextStyle.long, placeholder="За активность...", max_length=200)
+class BuffModal(Modal):
+    name = TextInput(label="Название", placeholder="Напр: Экономический подъем", max_length=100)
+    percent = TextInput(label="Процент (число)", placeholder="Напр: 15", max_length=5)
+    duration = TextInput(label="Срок действия (в днях)", placeholder="Напр: 0.5 для 12 часов или 1 для суток", max_length=10)
 
-    def __init__(self, target: discord.Member, buff_type: str):
-        super().__init__()
-        self.target = target
+    def __init__(self, target_member, buff_type):
+        super().__init__(title="Выдача баффа" if buff_type == 'buff' else "Выдача дебаффа")
+        self.target = target_member
         self.buff_type = buff_type
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            p = int(self.percent.value)
-            if not (1 <= p <= 100):
-                raise ValueError
+            pct = int(self.percent.value)
+            days = float(self.duration.value.replace(',', '.'))
+            expires_at = datetime.now().timestamp() + (days * 86400)
+            
+            buff_data = {
+                'user_id': str(self.target.id),
+                'name': self.name.value,
+                'percent': pct,
+                'type': self.buff_type,
+                'expires_at': expires_at
+            }
+            await buffs_col.insert_one(buff_data)
+            
+            await interaction.response.send_message(
+                f"✅ {'Бафф' if self.buff_type == 'buff' else 'Дебафф'} **{self.name.value}** (+{pct}%) "
+                f"выдан игроку {self.target.mention} на {days} дн.", ephemeral=True)
         except ValueError:
-            await interaction.response.send_message("❌ Процент должен быть целым числом от 1 до 100.", ephemeral=True)
-            return
-        reason = self.reason.value.strip() or "Без причины"
-        await buffs_col.insert_one({
-            'user_id': str(self.target.id),
-            'type': self.buff_type,
-            'percent': p,
-            'reason': reason,
-            'issued_by': str(interaction.user.id),
-            'issued_at': datetime.now().timestamp()
-        })
-        embed = discord.Embed(title="✅ Эффект добавлен",
-                              description=f"{'Бафф' if self.buff_type == 'buff' else 'Дебафф'} **{p}%** для {self.target.mention}\nПричина: {reason}",
-                              color=discord.Color.green() if self.buff_type == 'buff' else discord.Color.red())
-        await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message("❌ Ошибка: Процент должен быть целым числом, а срок — числом (напр. 0.5).", ephemeral=True)
 
 class BuffListView(View):
     def __init__(self, target: discord.Member, buffs: list, admin: discord.Member):
