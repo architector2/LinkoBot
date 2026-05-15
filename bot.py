@@ -345,7 +345,7 @@ USAGE_HINTS = {
     'iso-ally': '❌ Использование: `!iso-ally <название альянса> <ссылка на изображение>`',
     'edit-buy': '❌ Использование: `!edit-buy <название/часть названия> <новая стоимость>`\nПример: `!edit-buy Т-90 6000000`',
     'set-ideology': '❌ Использование: `!set-ideology <текст идеологии>`\nПример: `!set-ideology Демократия, свобода и справедливость`\nМаксимум 200 символов.\nДля просмотра текущей идеологии введите: `!set-ideology` без аргументов',
-    'sell': '❌ Использование: `!sell <название/часть названия> <количество> @Игрок <цена>`\nПример: `!sell Т-90 3 @Undervud 500000`',
+    'sell': '❌ Использование: `!sell <количество> @игрок <сумма> <название или часть названия>`\nПример: `!sell 3 @Undervud 15000000 Т-90`',
 }
 
 @bot.event
@@ -717,6 +717,80 @@ class Economy(commands.Cog, name="💰 Экономика"):
             color=discord.Color.blue()
         )
         await ctx.send(embed=embed)
+
+    @commands.command(name='sell')
+    @is_registered()
+    @commands.cooldown(1, 5, commands.BucketType.user)
+    async def sell(self, ctx, quantity: int, member: discord.Member, amount: int, *, item_query: str):
+        """Продать предмет из инвентаря другому игроку"""
+        if member.bot:
+            await ctx.send("❌ Нельзя продавать ботам!")
+            return
+        if member == ctx.author:
+            await ctx.send("❌ Нельзя продавать самому себе!")
+            return
+        if quantity <= 0:
+            await ctx.send("❌ Количество должно быть больше 0.")
+            return
+        if amount <= 0:
+            await ctx.send("❌ Сумма должна быть больше 0.")
+            return
+
+        # Проверяем, что покупатель зарегистрирован
+        buyer_user = await get_user(member.id)
+        role = ctx.guild.get_role(REGISTERED_ROLE_ID)
+        if role is None or role not in member.roles:
+            await ctx.send("❌ Покупатель не зарегистрирован.")
+            return
+
+        # Ищем предметы в инвентаре продавца (частичное совпадение)
+        items = await get_inventory(ctx.author.id)
+        if not items:
+            await ctx.send("❌ Ваш инвентарь пуст.")
+            return
+
+        regex = re.compile(re.escape(item_query.strip()), re.IGNORECASE)
+        matches = [it for it in items if regex.search(it['item_name'])]
+        if not matches:
+            await ctx.send("❌ У вас нет предметов с таким названием.")
+            return
+
+        # Если несколько вариантов — даём продавцу выбрать через меню
+        if len(matches) > 1:
+            options = [
+                discord.SelectOption(label=it['item_name'][:100])
+                for it in matches[:25]
+            ]
+            select = Select(placeholder="Выберите предмет для продажи...", options=options)
+            view = SellItemSelectView(ctx.author.id, matches, select, member, quantity, amount, self)
+            select.callback = view.select_callback
+            view.add_item(select)
+            await ctx.send("Найдено несколько предметов. Выберите, что продавать:", view=view, ephemeral=True)
+            return
+
+        item = matches[0]
+        if item['quantity'] < quantity:
+            await ctx.send(f"❌ У вас только **{item['quantity']}** шт. предмета **{item['item_name']}**.")
+            return
+
+        # Публикуем предложение
+        embed = self._build_sell_offer_embed(ctx.author, member, item['item_name'], quantity, amount)
+        view = TradeOfferView(ctx.author.id, member.id, item['item_name'], quantity, amount, self)
+        await ctx.send(embed=embed, view=view)
+
+    def _build_sell_offer_embed(self, seller: discord.Member, buyer: discord.Member,
+                                item_name: str, quantity: int, price: int) -> discord.Embed:
+        embed = discord.Embed(
+            title="💰 Предложение о продаже",
+            description=(
+                f"{seller.mention} предлагает {buyer.mention} купить:\n"
+                f"**{item_name}** × {quantity}\n"
+                f"Цена: **{price:,}** 💵"
+            ),
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text="У покупателя 2 минуты, чтобы принять или отклонить.")
+        return embed
 
     @commands.command(name='top')
     @is_registered()
@@ -1396,67 +1470,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
                 await interaction.response.send_message(err, ephemeral=True)
             else:
                 await ctx.send(err)
-@commands.command(name='sell')
-@is_registered()
-async def sell(self, ctx, *, args: str):
-    """Продать технику другому игроку: !sell <название> <кол-во> @игрок <цена>"""
-    # Parse input: <item_name> <quantity> @member <price>
-    pattern = r'^(.+?)\s+(\d+)\s+<@!?(\d+)>\s+(\d+)$'
-    match = re.match(pattern, args.strip())
-    if not match:
-        await ctx.send("❌ Неверный формат. Использование: `!sell <название> <количество> @Игрок <цена>`\nПример: `!sell Т-90 3 @Undervud 500000`")
-        return
-
-    item_name = match.group(1).strip()
-    try:
-        quantity = int(match.group(2))
-        buyer_id = int(match.group(3))
-        price = int(match.group(4))
-    except ValueError:
-        await ctx.send("❌ Количество и цена должны быть целыми числами.")
-        return
-
-    if quantity <= 0 or price <= 0:
-        await ctx.send("❌ Количество и цена должны быть положительными.")
-        return
-
-    buyer = ctx.guild.get_member(buyer_id)
-    if buyer is None:
-        await ctx.send("❌ Указанный игрок не найден на сервере.")
-        return
-    if buyer == ctx.author:
-        await ctx.send("❌ Нельзя продать технику самому себе.")
-        return
-
-    # Find item in seller's inventory (partial match)
-    items = await get_inventory(ctx.author.id)
-    regex = re.compile(re.escape(item_name), re.IGNORECASE)
-    matches = [it for it in items if regex.search(it['item_name'])]
-    if not matches:
-        await ctx.send("❌ У вас нет предметов с таким названием.")
-        return
-    if len(matches) > 1:
-        names = ', '.join(it['item_name'] for it in matches[:10])
-        await ctx.send(f"❌ Найдено несколько предметов: {names}. Уточните название.")
-        return
-
-    item = matches[0]
-    if item['item_name'] == "Обученный Солдат":
-        await ctx.send("❌ Солдат нельзя продавать через эту команду.")
-        return
-    if item['quantity'] < quantity:
-        await ctx.send(f"❌ У вас недостаточно **{item['item_name']}**. Доступно: {item['quantity']} шт.")
-        return
-
-    # Create the offer view
-    view = SellView(ctx.author, buyer, item['item_name'], quantity, price, self)
-    embed = discord.Embed(
-        title="🛒 Предложение о продаже",
-        description=f"{ctx.author.mention} предлагает купить **{quantity}x {item['item_name']}** за **{price:,} 💵**",
-        color=discord.Color.orange()
-    )
-    embed.set_footer(text="У вас есть 2 минуты, чтобы принять или отклонить предложение.")
-    view.message = await ctx.send(embed=embed, view=view)
 
     @commands.command(name='vehicle-info')
     @is_registered()
@@ -2562,72 +2575,6 @@ class IsoSelectView(View):
         if vehicle:
             await vehicles_col.update_one({'_id': vehicle['_id']}, {'$set': {'image_url': self.image_url}})
             await interaction.response.send_message(f"✅ Изображение для **{vehicle['name']}** обновлено.", ephemeral=True)
-class SellView(View):
-    def __init__(self, seller: discord.Member, buyer: discord.Member, item_name: str, quantity: int, price: int, shop_cog):
-        super().__init__(timeout=120)
-        self.seller = seller
-        self.buyer = buyer
-        self.item_name = item_name
-        self.quantity = quantity
-        self.price = price
-        self.shop_cog = shop_cog
-        self.message = None
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.buyer.id:
-            await interaction.response.send_message("❌ Это предложение не для вас.", ephemeral=True)
-            return False
-        return True
-
-    async def on_timeout(self):
-        if self.message:
-            await self.message.edit(content="⏰ Время предложения истекло.", view=None)
-
-    @button(label="Принять", style=discord.ButtonStyle.success)
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Re-check buyer's balance and requirements
-        buyer_user = await get_user(self.buyer.id)
-        if buyer_user['balance'] < self.price:
-            await interaction.response.send_message(f"❌ Недостаточно денег. Ваш баланс: {buyer_user['balance']:,} 💵", ephemeral=True)
-            return
-
-        # Check vehicle license / country restriction (same as !buy)
-        vehicle = await vehicles_col.find_one({"approved": True, "name": self.item_name})
-        if vehicle:
-            buyer_country = buyer_user.get('country')
-            vehicle_country = vehicle.get('country')
-            if buyer_country != vehicle_country:
-                lic = await licenses_col.find_one({'user_id': str(self.buyer.id), 'vehicle_name': self.item_name})
-                if not lic:
-                    await interaction.response.send_message("❌ У вас нет лицензии на эту технику (нужно быть той же страны или иметь лицензию).", ephemeral=True)
-                    return
-
-        # Re-check seller still has the items
-        seller_items = await get_inventory(self.seller.id)
-        item = next((it for it in seller_items if it['item_name'] == self.item_name), None)
-        if not item or item['quantity'] < self.quantity:
-            await interaction.response.send_message("❌ Продавец больше не обладает нужным количеством предмета.", ephemeral=True)
-            return
-
-        # Execute transaction
-        await remove_item(self.seller.id, self.item_name, self.quantity)
-        await add_item(self.buyer.id, self.item_name, self.quantity)
-
-        seller_user = await get_user(self.seller.id)
-        await update_user(self.seller.id, {'balance': seller_user['balance'] + self.price})
-        await update_user(self.buyer.id, {'balance': buyer_user['balance'] - self.price})
-
-        # Update message
-        embed = discord.Embed(
-            title="✅ Продажа совершена",
-            description=f"{self.buyer.mention} купил у {self.seller.mention} **{self.quantity}x {self.item_name}** за **{self.price:,} 💵**",
-            color=discord.Color.green()
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
-
-    @button(label="Отклонить", style=discord.ButtonStyle.danger)
-    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="❌ Предложение отклонено.", view=None)
 
 class InvseeChoiceView(View):
     def __init__(self, admin_id: int, target_id: int, bot):
@@ -3502,6 +3449,123 @@ class AdminAllyDeleteSelectView(View):
                 await interaction.response.send_message("❌ Не удалось удалить альянс.", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
+# ========== VIEW ДЛЯ ПРОДАЖИ ПРЕДМЕТОВ ==========
+class TradeOfferView(View):
+    def __init__(self, seller_id: int, buyer_id: int, item_name: str,
+                 quantity: int, price: int, economy_cog):
+        super().__init__(timeout=120)
+        self.seller_id = seller_id
+        self.buyer_id = buyer_id
+        self.item_name = item_name
+        self.quantity = quantity
+        self.price = price
+        self.economy_cog = economy_cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.buyer_id:
+            await interaction.response.send_message("❌ Это предложение не для вас.", ephemeral=True)
+            return False
+        return True
+
+    @button(label="Принять", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Перепроверяем баланс покупателя
+        buyer = await get_user(self.buyer_id)
+        if buyer['balance'] < self.price:
+            await interaction.response.send_message(
+                f"❌ У вас недостаточно денег. Нужно **{self.price:,}** 💵, у вас **{buyer['balance']:,}** 💵.",
+                ephemeral=True
+            )
+            return
+
+        seller = await get_user(self.seller_id)
+
+        # Проверяем наличие предмета у продавца
+        success = await remove_item(self.seller_id, self.item_name, self.quantity)
+        if not success:
+            await interaction.response.send_message(
+                "❌ У продавца больше нет этого количества предмета.", ephemeral=True
+            )
+            return
+
+        # Переводим деньги
+        await update_user(self.seller_id, {'balance': seller['balance'] + self.price})
+        await update_user(self.buyer_id, {'balance': buyer['balance'] - self.price})
+
+        # Выдаём предмет покупателю
+        await add_item(self.buyer_id, self.item_name, self.quantity)
+
+        embed = discord.Embed(
+            title="✅ Сделка совершена",
+            description=(
+                f"Покупатель: <@{self.buyer_id}>\n"
+                f"Продавец: <@{self.seller_id}>\n"
+                f"Товар: **{self.item_name}** × {self.quantity}\n"
+                f"Сумма: **{self.price:,}** 💵"
+            ),
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @button(label="Отклонить", style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="❌ Предложение отклонено",
+            description=f"Покупатель <@{self.buyer_id}> отказался от покупки.",
+            color=discord.Color.red()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    async def on_timeout(self):
+        # Редактируем сообщение, чтобы показать, что время истекло
+        if hasattr(self, 'message') and self.message:
+            embed = self.message.embeds[0]
+            embed.color = discord.Color.light_grey()
+            embed.set_footer(text="⏰ Время истекло, предложение больше не активно.")
+            await self.message.edit(embed=embed, view=None)
+
+class SellItemSelectView(View):
+    """Позволяет продавцу выбрать конкретный предмет, если найдено несколько совпадений."""
+    def __init__(self, seller_id: int, matches: list, select: Select,
+                 buyer: discord.Member, quantity: int, price: int, economy_cog):
+        super().__init__(timeout=30)
+        self.seller_id = seller_id
+        self.matches = matches
+        self.buyer = buyer
+        self.quantity = quantity
+        self.price = price
+        self.economy_cog = economy_cog
+        # select добавлен извне
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.seller_id:
+            await interaction.response.send_message("❌ Это меню не для вас.", ephemeral=True)
+            return False
+        return True
+
+    async def select_callback(self, interaction: discord.Interaction):
+        selected_name = interaction.data['values'][0]
+        item = next((it for it in self.matches if it['item_name'] == selected_name), None)
+        if not item:
+            await interaction.response.send_message("❌ Предмет не найден.", ephemeral=True)
+            return
+        if item['quantity'] < self.quantity:
+            await interaction.response.send_message(
+                f"❌ У вас только **{item['quantity']}** шт. предмета **{item['item_name']}**.",
+                ephemeral=True
+            )
+            return
+
+        # Формируем публичное предложение
+        embed = self.economy_cog._build_sell_offer_embed(
+            discord.Object(id=self.seller_id), self.buyer,
+            item['item_name'], self.quantity, self.price
+        )
+        view = TradeOfferView(self.seller_id, self.buyer.id, item['item_name'],
+                              self.quantity, self.price, self.economy_cog)
+        await interaction.channel.send(embed=embed, view=view)
+        # Удаляем исходное меню (сообщение с select)
+        await interaction.message.delete()
 
 class AdminAllyDeleteButton(discord.ui.Button):
     def __init__(self, alliance_id, name):
