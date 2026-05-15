@@ -1,0 +1,62 @@
+[0;1;31mFailed to read "/boot/EFI/systemd": Permission denied[0m
+[0;1;31mFailed to open '/boot/loader/loader.conf': Permission denied[0m
+[0;4mSystem:[0m
+      Firmware: [0;1;39mUEFI 2.70 (American Megatrends 5.17)[0m
+ Firmware Arch: x64
+   Secure Boot: [0mdisabled[0m
+  TPM2 Support: [0;1;32myes[0m
+  Measured UKI: no
+  Boot into FW: supported
+
+[0;4mCurrent Boot Loader:[0m
+       Product: [0;1;39msystemd-boot 258.5[0m
+     Features: [0;1;32m✓[0m Boot counting
+               [0;1;32m✓[0m Menu timeout control
+               [0;1;32m✓[0m One-shot menu timeout control
+               [0;1;32m✓[0m Default entry control
+               [0;1;32m✓[0m One-shot entry control
+               [0;1;32m✓[0m Support for XBOOTLDR partition
+               [0;1;32m✓[0m Support for passing random seed to OS
+               [0;1;32m✓[0m Load drop-in drivers
+               [0;1;32m✓[0m Support Type #1 sort-key field
+               [0;1;32m✓[0m Support @saved pseudo-entry
+               [0;1;32m✓[0m Support Type #1 devicetree field
+               [0;1;32m✓[0m Enroll SecureBoot keys
+               [0;1;32m✓[0m Retain SHIM protocols
+               [0;1;32m✓[0m Menu can be disabled
+               [0;1;32m✓[0m Multi-Profile UKIs are supported
+               [0;1;32m✓[0m Loader reports network boot URL
+               [0;1;32m✓[0m Support Type #1 uki field
+               [0;1;32m✓[0m Support Type #1 uki-url field
+               [0;1;32m✓[0m Loader reports TPM2 active PCR banks
+     Partition: /dev/disk/by-partuuid/e375563a-521e-450b-8f47-a92ebcb3fc6d
+        Loader: └─[0;38:5:245m/boot/[0m/EFI/SYSTEMD/SYSTEMD-BOOTX64.EFI
+ Current Entry: nixos-generation-20.conf
+
+[0;4mRandom Seed:[0m
+ System Token: set
+       Exists: Can't access /boot/loader/random-seed (Permission denied)
+
+[0;4mAvailable Boot Loaders on ESP:[0m
+          ESP: /boot (/dev/disk/by-partuuid/e375563a-521e-450b-8f47-a92ebcb3fc6d)
+         File: (can't access /boot: Permission denied)
+
+[0;4mBoot Loaders Listed in EFI Variables:[0m
+        Title: [0;1;39mLinux Boot Manager[0m
+           ID: 0x0001
+       Status: active, boot-order
+    Partition: /dev/disk/by-partuuid/e375563a-521e-450b-8f47-a92ebcb3fc6d
+         File: └─[0;38:5:245m/boot/[0m/EFI/SYSTEMD/SYSTEMD-BOOTX64.EFI
+
+        Title: [0;1;39mWindows Boot Manager[0m
+           ID: 0x0000
+       Status: active, boot-order
+    Partition: /dev/disk/by-partuuid/1c402dd2-7c81-4d4b-a663-2db135ca7db5
+         File: └─[0;38:5:245m/boot/[0m/EFI/MICROSOFT/BOOT/BOOTMGFW.EFI
+
+        Title: [0;1;39mUEFI OS[0m
+           ID: 0x0005
+       Status: active, boot-order
+    Partition: /dev/disk/by-partuuid/e375563a-521e-450b-8f47-a92ebcb3fc6d
+         File: └─[0;38:5:245m/boot/[0m/EFI/BOOT/BOOTX64.EFI
+
