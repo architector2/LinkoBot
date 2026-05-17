@@ -1278,7 +1278,7 @@ class Admin(commands.Cog, name="👑 Админ"):
         embed.add_field(name="Старая стоимость", value=f"{old_price:,} 💵", inline=True)
         embed.add_field(name="Новая стоимость", value=f"{new_price:,} 💵", inline=True)
         await ctx.send(embed=embed)
-    @commands.command(name='burn-list')
+        
     @commands.command(name='burn-list')
     @commands.has_permissions(administrator=True)
     async def burn_list(self, ctx, member: discord.Member):
