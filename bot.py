@@ -282,7 +282,7 @@ async def get_inventory(user_id: int) -> list:
 
 # ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОБСЛУЖИВАНИЯ =====
 async def get_vehicle_maintenance_cost_per_hour(user_id: int) -> int:
-    """Рассчитывает стоимость содержания как 20% от стоимости техники в инвентаре за час"""
+    """Рассчитывает стоимость содержания как 3% от стоимости техники в инвентаре за час"""
     inventory = await get_inventory(user_id)
     total_cost = 0
     
@@ -294,7 +294,7 @@ async def get_vehicle_maintenance_cost_per_hour(user_id: int) -> int:
         if vehicle:
             total_cost += vehicle['price'] * item['quantity']
     
-    maintenance = int(total_cost * 0.2)
+    maintenance = int(total_cost * 0.03)
     return maintenance
 
 SOLDIER_MAINTENANCE_PER_HOUR = 100
@@ -572,7 +572,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         if vehicle_cost > 0:
             embed.add_field(
-                name="🛠️ Содержание техники (20% от стоимости)",
+                name="🛠️ Содержание техники (3% от стоимости)",
                 value=f"Расход: -{vehicle_cost:,} 💵",
                 inline=False
             )
