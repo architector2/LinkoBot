@@ -68,6 +68,7 @@ daily_mobilization_col = db['daily_mobilization']
 buffs_col = db['buffs']
 alliances_col = db['alliances']
 alliance_invites_col = db['alliance_invites']
+burn_logs_col = db['burn_logs']
 
 # ID ролей и каналов
 REGISTERED_ROLE_ID = 1501510805169115176
@@ -346,6 +347,9 @@ USAGE_HINTS = {
     'edit-buy': '❌ Использование: `!edit-buy <название/часть названия> <новая стоимость>`\nПример: `!edit-buy Т-90 6000000`',
     'set-ideology': '❌ Использование: `!set-ideology <текст идеологии>`\nПример: `!set-ideology Демократия, свобода и справедливость`\nМаксимум 200 символов.\nДля просмотра текущей идеологии введите: `!set-ideology` без аргументов',
     'sell': '❌ Использование: `!sell <количество> @игрок <сумма> <название или часть названия>`\nПример: `!sell 3 @Undervud 15000000 Т-90`',
+    'burn': '❌ Использование: `!burn <сумма> <причина>`\nПример: `!burn 100000 экономический кризис`',
+    'burn-list': '❌ Использование: `!burn-list @игрок`',
+    
 }
 
 @bot.event
@@ -911,6 +915,48 @@ class Economy(commands.Cog, name="💰 Экономика"):
             embed.add_field(name="Стала", value=f"**{ideology_clean}**", inline=True)
         await ctx.send(embed=embed)
 
+    @commands.command(name='burn')
+    @is_registered()
+    @commands.cooldown(1, 3, commands.BucketType.user)
+    async def burn(self, ctx, amount: int, *, reason: str = "Без причины"):
+        """Сжечь деньги из баланса (для зарегистрированных игроков)"""
+        if amount <= 0:
+            await ctx.send("❌ Сумма должна быть больше 0!")
+            return
+        
+        # Валидация суммы
+        is_valid, error_msg = validate_amount(amount)
+        if not is_valid:
+            await ctx.send(error_msg)
+            return
+        
+        user = await get_user(ctx.author.id)
+        if user['balance'] < amount:
+            await ctx.send(f"❌ Недостаточно денег! Баланс: {user['balance']:,} 💵")
+            return
+        
+        # Сжигаем деньги
+        new_balance = user['balance'] - amount
+        await update_user(ctx.author.id, {'balance': new_balance})
+        
+        # Логируем в базу
+        await burn_logs_col.insert_one({
+            'user_id': str(ctx.author.id),
+            'amount': amount,
+            'reason': reason.strip(),
+            'timestamp': datetime.now().timestamp(),
+            'username': ctx.author.name
+        })
+        
+        embed = discord.Embed(
+            title="🔥 Деньги сожжены",
+            description=f"{ctx.author.mention} сжег **{amount:,}** 💵",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="Причина", value=reason.strip(), inline=False)
+        embed.add_field(name="Баланс", value=f"{new_balance:,} 💵", inline=False)
+        await ctx.send(embed=embed)
+
 # ===========================
 # 📊 COG: БЮДЖЕТ
 # ===========================
@@ -1231,6 +1277,50 @@ class Admin(commands.Cog, name="👑 Админ"):
         )
         embed.add_field(name="Старая стоимость", value=f"{old_price:,} 💵", inline=True)
         embed.add_field(name="Новая стоимость", value=f"{new_price:,} 💵", inline=True)
+        await ctx.send(embed=embed)
+    @commands.command(name='burn-list')
+    @commands.command(name='burn-list')
+    @commands.has_permissions(administrator=True)
+    async def burn_list(self, ctx, member: discord.Member):
+        """Показать историю сжигания денег игрока"""
+        logs = await burn_logs_col.find({'user_id': str(member.id)}).sort('timestamp', -1).to_list(length=None)
+        
+        if not logs:
+            await ctx.send(f"❌ У {member.mention} нет истории сжигания денег.")
+            return
+        
+        embed = discord.Embed(
+            title=f"🔥 История сжигания денег {member.name}",
+            color=discord.Color.orange()
+        )
+        
+        description = ""
+        for i, log in enumerate(logs, 1):
+            timestamp = log.get('timestamp', 0)
+            dt = datetime.fromtimestamp(timestamp)
+            formatted_time = dt.strftime('%d.%m.%Y %H:%M:%S')
+            reason = log.get('reason', 'Без причины')
+            amount = log.get('amount', 0)
+            
+            line = f"**{i}.** {amount:,} 💵 — {reason}\n   ⏰ {formatted_time}\n"
+            description += line
+        
+        if len(description) > 2000:
+            # Если слишком много, показываем последние 10
+            description = ""
+            for i, log in enumerate(logs[:10], 1):
+                timestamp = log.get('timestamp', 0)
+                dt = datetime.fromtimestamp(timestamp)
+                formatted_time = dt.strftime('%d.%m.%Y %H:%M:%S')
+                reason = log.get('reason', 'Без причины')
+                amount = log.get('amount', 0)
+                
+                line = f"**{i}.** {amount:,} 💵 — {reason}\n   ⏰ {formatted_time}\n"
+                description += line
+            description += f"\n*Показаны последние 10 записей из {len(logs)}*"
+        
+        embed.description = description
+        embed.set_footer(text=f"Всего записей: {len(logs)}")
         await ctx.send(embed=embed)
 
 # ===========================
