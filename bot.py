@@ -3823,15 +3823,15 @@ class LicListPaginationView(View):
         self.base_embed.set_footer(text=f"Страница {self.current_page+1}/{self.total_pages}")
         await interaction.response.edit_message(embed=self.base_embed, view=self)
 
-        class TakeLicSelectView(View):
-            def __init__(self, author_id, target_id, matches, select, shop_cog):
-            super().__init__(timeout=60)
-            self.author_id = author_id
-            self.target_id = target_id
-            self.matches = matches
-            self.shop_cog = shop_cog
-            select.callback = self.select_callback
-            self.add_item(select)
+class TakeLicSelectView(View):
+    def __init__(self, author_id, target_id, matches, select, shop_cog):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.target_id = target_id
+        self.matches = matches
+        self.shop_cog = shop_cog
+        select.callback = self.select_callback
+        self.add_item(select)
 
     async def interaction_check(self, interaction):
         return interaction.user.id == self.author_id
@@ -3844,10 +3844,17 @@ class LicListPaginationView(View):
             'vehicle_name': vehicle['name']
         })
         if result.deleted_count:
-            await interaction.response.send_message(f"✅ Лицензия на **{vehicle['name']}** у <@{self.target_id}> забрана.", ephemeral=True)
+            await interaction.response.send_message(
+                f"✅ Лицензия на **{vehicle['name']}** у <@{self.target_id}> забрана.",
+                ephemeral=True
+            )
         else:
-            await interaction.response.send_message(f"❌ У <@{self.target_id}> нет лицензии на **{vehicle['name']}**.", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ У <@{self.target_id}> нет лицензии на **{vehicle['name']}**.",
+                ephemeral=True
+            )
         self.stop()
+
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
 async def setup_hook():
