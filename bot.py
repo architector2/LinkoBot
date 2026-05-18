@@ -349,7 +349,8 @@ USAGE_HINTS = {
     'sell': '❌ Использование: `!sell <количество> @игрок <сумма> <название или часть названия>`\nПример: `!sell 3 @Undervud 15000000 Т-90`',
     'burn': '❌ Использование: `!burn <сумма> <причина>`\nПример: `!burn 100000 экономический кризис`',
     'burn-list': '❌ Использование: `!burn-list @игрок`',
-    
+    'take-lic': '❌ Использование: `!take-lic @игрок <название техники или часть названия>`\nПример: `!take-lic @Undervud Т-90`',
+    'lic-list': '❌ Команда `!lic-list` показывает лицензии, полученные вами.\nИ `!lic-list @игрок` показывает лицензии, выданные этим игроком.',
 }
 
 @bot.event
@@ -1463,6 +1464,93 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         )
         await ctx.send(f"✅ {target.mention} получил лицензию на **{vehicle['name']}**.")
 
+@commands.command(name='take-lic')
+@is_registered()
+async def take_license(self, ctx, target: discord.Member, *, vehicle_identifier: str):
+    """Забрать лицензию на технику (может только владелец техники)"""
+    # Проверяем, что это владелец техники
+    vehicle = await vehicles_col.find_one({"approved": True, "name": vehicle_identifier.strip(), "submitter_id": str(ctx.author.id)})
+    if not vehicle:
+        regex = re.compile(re.escape(vehicle_identifier.strip()), re.IGNORECASE)
+        candidates = await vehicles_col.find({
+            "approved": True,
+            "submitter_id": str(ctx.author.id),
+            "name": {"$regex": regex}
+        }).to_list(length=None)
+        if not candidates:
+            await ctx.send("❌ У вас нет одобренной техники с таким названием.")
+            return
+        if len(candidates) > 1:
+            names = [v['name'] for v in candidates]
+            await ctx.send(f"❌ Найдено несколько совпадений: {', '.join(names)}. Уточните название.")
+            return
+        vehicle = candidates[0]
+    
+    # Проверяем наличие лицензии у целевого игрока
+    license_doc = await licenses_col.find_one({
+        'user_id': str(target.id),
+        'vehicle_name': vehicle['name']
+    })
+    if not license_doc:
+        await ctx.send(f"❌ У {target.mention} нет лицензии на **{vehicle['name']}**.")
+        return
+    
+    # Удаляем лицензию
+    await licenses_col.delete_one({'_id': license_doc['_id']})
+    await ctx.send(f"✅ Лицензия на **{vehicle['name']}** отозвана у {target.mention}.")
+
+@commands.command(name='lic-list', aliases=['licenses'])
+@is_registered()
+async def license_list(self, ctx, target: discord.Member = None):
+    """Показать выданные вам лицензии или лицензии другого игрока"""
+    if target is None:
+        target = ctx.author
+        view_mode = 'received'
+    else:
+        view_mode = 'issued'
+    
+    embed = discord.Embed(color=discord.Color.blue())
+    
+    if view_mode == 'received':
+        licenses = await licenses_col.find({'user_id': str(target.id)}).to_list(length=None)
+        embed.title = f"🎖️ Лицензии {target.name}"
+        embed.description = "Лицензии, полученные от других игроков"
+        
+        if not licenses:
+            embed.add_field(name="Результат", value="Нет лицензий.", inline=False)
+        else:
+            text = ""
+            for lic in licenses:
+                issued_by_id = int(lic.get('issued_by', 0))
+                issued_by = ctx.guild.get_member(issued_by_id)
+                issued_by_name = issued_by.name if issued_by else f"User{issued_by_id}"
+                text += f"**{lic['vehicle_name']}** (выдана {issued_by_name})\n"
+            
+            if len(text) > 1024:
+                text = text[:1021] + "..."
+            embed.add_field(name="Лицензии", value=text, inline=False)
+    else:
+        licenses = await licenses_col.find({'issued_by': str(target.id)}).to_list(length=None)
+        embed.title = f"🎖️ Выданные лицензии {target.name}"
+        embed.description = "Лицензии, выданные этим игроком"
+        
+        if not licenses:
+            embed.add_field(name="Результат", value="Нет выданных лицензий.", inline=False)
+        else:
+            text = ""
+            for lic in licenses:
+                user_id = int(lic.get('user_id', 0))
+                user_obj = ctx.guild.get_member(user_id)
+                user_name = user_obj.name if user_obj else f"User{user_id}"
+                text += f"**{lic['vehicle_name']}** → {user_name}\n"
+            
+            if len(text) > 1024:
+                text = text[:1021] + "..."
+            embed.add_field(name="Лицензии", value=text, inline=False)
+    
+    embed.set_footer(text=f"Запросил: {ctx.author.name}")
+    await ctx.send(embed=embed)
+
     @commands.command(name='buy')
     @is_registered()
     async def buy(self, ctx, quantity: int, *, item_name: str):
@@ -1687,54 +1775,94 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             try: await submitter.send(f"❌ Ваша заявка на технику **{vehicle['name']}** отклонена.\nПричина: {reason}")
             except: pass
 
-    async def perform_mobilization(self, interaction: discord.Interaction, user_id: int, quantity: int, message_link: str):
-        pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
-        match = re.match(pattern, message_link)
-        if not match:
-            return "❌ Неверный формат ссылки."
-        channel_id = match.group(1)
-        message_id = match.group(2)
-        if channel_id != "1363585142593032412":
-            return "❌ Ссылка должна вести в канал реформ (<#1363585142593032412>)."
-        existing = await mobilization_links_col.find_one({"message_id": message_id})
-        if existing:
-            return "❌ Эта ссылка уже использовалась для мобилизации."
+async def perform_mobilization(self, interaction: discord.Interaction, user_id: int, quantity: int, message_link: str):
+    """
+    Переработанная мобилизация:
+    - Можно мобилизовать много раз в день до достижения лимита 350k
+    - Лимит обновляется через 24 часа
+    - CD не накладывается, если не достигнут дневной лимит
+    """
+    pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
+    match = re.match(pattern, message_link)
+    if not match:
+        return "❌ Неверный формат ссылки."
+    
+    channel_id = match.group(1)
+    message_id = match.group(2)
+    
+    if channel_id != "1363585142593032412":
+        return "❌ Ссылка должна вести в канал реформ (<#1363585142593032412>)."
+    
+    # Проверяем, что ссылка не была использована
+    existing = await mobilization_links_col.find_one({"message_id": message_id})
+    if existing:
+        return "❌ Эта ссылка уже использовалась для мобилизации."
 
-        user = await get_user(user_id)
-        population = user.get('population', 0)
-        mob_percent = user.get('mobilization_percent', 2.5)
-        max_mobilizable = int(population * mob_percent / 100)
-        if quantity > max_mobilizable:
-            return f"❌ Нельзя мобилизовать больше **{max_mobilizable:,}**."
-        if quantity <= 0:
-            return "❌ Количество должно быть положительным."
+    user = await get_user(user_id)
+    population = user.get('population', 0)
+    mob_percent = user.get('mobilization_percent', 2.5)
+    max_mobilizable = int(population * mob_percent / 100)
+    
+    if quantity > max_mobilizable:
+        return f"❌ Нельзя мобилизовать больше **{max_mobilizable:,}**. Это {mob_percent}% от вашего населения."
+    
+    if quantity <= 0:
+        return "❌ Количество должно быть положительным."
 
-        today = datetime.now().strftime('%Y-%m-%d')
-        daily_doc = await daily_mobilization_col.find_one({'user_id': str(user_id), 'date_str': today})
-        already = daily_doc['total'] if daily_doc else 0
-        if already + quantity > 350_000:
-            return f"❌ Превышен дневной лимит (уже {already:,}, можно ещё {max(0, 350_000 - already):,})."
+    today = datetime.now().strftime('%Y-%m-%d')
+    daily_doc = await daily_mobilization_col.find_one({
+        'user_id': str(user_id), 
+        'date_str': today
+    })
+    
+    already_mobilized = daily_doc['total'] if daily_doc else 0
+    DAILY_LIMIT = 350_000
+    
+    # Проверяем дневной лимит
+    if already_mobilized >= DAILY_LIMIT:
+        return f"❌ Дневной лимит мобилизации ({DAILY_LIMIT:,}) исчерпан. Попробуйте завтра."
+    
+    # Проверяем, не превышаем ли лимит
+    if already_mobilized + quantity > DAILY_LIMIT:
+        remaining = DAILY_LIMIT - already_mobilized
+        return f"❌ Можете мобилизировать максимум **{remaining:,}** солдат (лимит за день {DAILY_LIMIT:,})."
 
-        new_population = population - quantity
-        await update_user(user_id, {
-            'population': new_population,
-            'mobilization_used': True
-        })
-        await add_item(user_id, "Обученный Солдат", quantity)
+    # Выполняем мобилизацию
+    new_population = population - quantity
+    await update_user(user_id, {
+        'population': new_population
+    })
+    await add_item(user_id, "Обученный Солдат", quantity)
 
-        await daily_mobilization_col.update_one(
-            {'user_id': str(user_id), 'date_str': today},
-            {'$inc': {'total': quantity}, '$setOnInsert': {'date_str': today}},
-            upsert=True
-        )
-        await mobilization_links_col.insert_one({
-            "message_id": message_id,
-            "channel_id": channel_id,
-            "used_by": str(user_id),
-            "used_at": datetime.now().timestamp()
-        })
+    # Обновляем дневной счетчик
+    await daily_mobilization_col.update_one(
+        {'user_id': str(user_id), 'date_str': today},
+        {'$inc': {'total': quantity}, '$setOnInsert': {'date_str': today}},
+        upsert=True
+    )
+    
+    # Записываем использование ссылки
+    await mobilization_links_col.insert_one({
+        "message_id": message_id,
+        "channel_id": channel_id,
+        "used_by": str(user_id),
+        "used_at": datetime.now().timestamp()
+    })
 
-        return f"✅ Мобилизовано **{quantity:,}** солдат. Население: {new_population:,}."
+    # Формируем информацию об оставшемся лимите
+    new_daily_total = already_mobilized + quantity
+    remaining_daily = DAILY_LIMIT - new_daily_total
+    
+    result_msg = f"✅ Мобилизовано **{quantity:,}** солдат.\n"
+    result_msg += f"👥 Население: {new_population:,}\n"
+    result_msg += f"📊 Дневной лимит: {new_daily_total:,}/{DAILY_LIMIT:,}"
+    
+    if remaining_daily > 0:
+        result_msg += f"\n⏰ Осталось сегодня: {remaining_daily:,} солдат"
+    else:
+        result_msg += f"\n⏰ Дневной лимит достигнут. Следующая мобилизация через 24 часа."
+    
+    return result_msg
 
 # ===========================
 # 🏛️ COG: АЛЬЯНСЫ
@@ -2088,10 +2216,6 @@ class MilitaryView(View):
             await interaction.response.send_message("❌ У вас нет населения.", ephemeral=True)
             return
 
-        if user.get('mobilization_used', False):
-            await interaction.response.send_message("❌ Вы уже мобилизовали население. Обратитесь к администратору для изменения лимита.", ephemeral=True)
-            return
-
         mob_percent = user.get('mobilization_percent', 2.5)
         max_mobilizable = int(population * mob_percent / 100)
         if max_mobilizable <= 0:
@@ -2101,12 +2225,18 @@ class MilitaryView(View):
         today = datetime.now().strftime('%Y-%m-%d')
         daily_doc = await daily_mobilization_col.find_one({'user_id': str(self.user_id), 'date_str': today})
         already_mobilized = daily_doc['total'] if daily_doc else 0
-        remaining_daily = max(0, 350_000 - already_mobilized)
+        DAILY_LIMIT = 350_000
+        remaining_daily = max(0, DAILY_LIMIT - already_mobilized)
+        
         if remaining_daily == 0:
-            await interaction.response.send_message("❌ Дневной лимит мобилизации (350,000) уже исчерпан.", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ Дневной лимит мобилизации ({DAILY_LIMIT:,}) исчерпан. Попробуйте завтра.",
+                ephemeral=True
+            )
             return
 
-        modal = MobilizationModal(max_mobilizable, remaining_daily, self.cog)
+        max_for_this = min(max_mobilizable, remaining_daily)
+        modal = MobilizationModal(max_for_this, remaining_daily, self.cog, already_mobilized, DAILY_LIMIT)
         await interaction.response.send_modal(modal)
 
 class VehicleInfoModal(Modal, title="Заполните данные техники"):
@@ -2168,11 +2298,16 @@ class MobilizationModal(Modal, title="Мобилизация населения"
     qty = TextInput(label="Количество солдат", placeholder="Введите число", max_length=10)
     link = TextInput(label="Ссылка на сообщение в канале реформ", placeholder="https://discord.com/channels/...", max_length=200)
 
-    def __init__(self, max_mobilizable, remaining_daily, cog):
+    def __init__(self, max_mobilizable, remaining_daily, cog, already_mobilized, daily_limit):
         super().__init__()
         self.max_mobilizable = max_mobilizable
         self.remaining_daily = remaining_daily
         self.cog = cog
+        self.already_mobilized = already_mobilized
+        self.daily_limit = daily_limit
+        
+        # Обновляем подсказку в инпуте
+        self.qty.placeholder = f"Макс {max_mobilizable:,} (осталось в день: {remaining_daily:,})"
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -2180,6 +2315,18 @@ class MobilizationModal(Modal, title="Мобилизация населения"
         except ValueError:
             await interaction.response.send_message("❌ Количество должно быть числом.", ephemeral=True)
             return
+        
+        if qty <= 0:
+            await interaction.response.send_message("❌ Количество должно быть положительным.", ephemeral=True)
+            return
+        
+        if qty > self.max_mobilizable:
+            await interaction.response.send_message(
+                f"❌ Максимум для мобилизации: **{self.max_mobilizable:,}**.",
+                ephemeral=True
+            )
+            return
+        
         result = await self.cog.perform_mobilization(interaction, interaction.user.id, qty, self.link.value.strip())
         await interaction.response.send_message(result, ephemeral=True)
 
