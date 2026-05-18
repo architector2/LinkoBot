@@ -1383,6 +1383,78 @@ class Shop(commands.Cog, name="🛒 Магазин"):
                 desc = v['description'][:80] + ('...' if len(v['description']) > 80 else '')
                 embed.add_field(name=name, value=desc, inline=False)
         return embed
+    @commands.command(name='take-lic')
+    @is_registered()
+    async def take_license(self, ctx, target: discord.Member, *, vehicle_name: str):
+        """Забрать выданную лицензию (только владелец техники)"""
+        vehicles = await vehicles_col.find({
+            "submitter_id": str(ctx.author.id),
+            "approved": True
+        }).to_list(length=None)
+        if not vehicles:
+            await ctx.send("❌ У вас нет одобренной техники, лицензии на которую можно забрать.")
+            return
+        regex = re.compile(re.escape(vehicle_name.strip()), re.IGNORECASE)
+        matches = [v for v in vehicles if regex.search(v['name'])]
+        if not matches:
+            await ctx.send(f"❌ Среди вашей техники нет названия, содержащего `{vehicle_name}`.")
+            return
+        if len(matches) > 1:
+            options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
+            select = Select(placeholder="Выберите технику, лицензию на которую забрать...", options=options)
+            view = TakeLicSelectView(ctx.author.id, target.id, matches, select, self)
+            select.callback = view.select_callback
+            view.add_item(select)
+            await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
+            return
+        vehicle = matches[0]
+        result = await licenses_col.delete_one({
+            'user_id': str(target.id),
+            'vehicle_name': vehicle['name']
+        })
+        if result.deleted_count:
+            await ctx.send(f"✅ Лицензия на **{vehicle['name']}** у {target.mention} забрана.")
+        else:
+            await ctx.send(f"❌ У {target.mention} нет лицензии на **{vehicle['name']}**.")
+
+    @commands.command(name='lic-list')
+    @is_registered()
+    async def license_list(self, ctx, member: discord.Member = None):
+        """Показать выданные лицензии. Без @ – ваши полученные. С @ – выданные этим игроком."""
+        if member is None:
+            licenses = await licenses_col.find({'user_id': str(ctx.author.id)}).to_list(length=None)
+            title = "📜 Лицензии, выданные вам"
+            empty_msg = "Вам никто не выдавал лицензий."
+        else:
+            licenses = await licenses_col.find({'issued_by': str(member.id)}).to_list(length=None)
+            title = f"📜 Лицензии, выданные игроком {member.name}"
+            empty_msg = f"{member.name} никому не выдавал лицензий."
+        if not licenses:
+            await ctx.send(empty_msg)
+            return
+        entries = []
+        for lic in licenses:
+            vehicle_name = lic['vehicle_name']
+            issuer_id = lic.get('issued_by')
+            if member is None:
+                issuer = ctx.guild.get_member(int(issuer_id)) if issuer_id else None
+                issuer_name = issuer.name if issuer else f"User{issuer_id}"
+                entries.append(f"**{vehicle_name}** – выдал {issuer_name}")
+            else:
+                target_id = lic['user_id']
+                target = ctx.guild.get_member(int(target_id)) if target_id else None
+                target_name = target.name if target else f"User{target_id}"
+                entries.append(f"**{vehicle_name}** – выдано {target_name}")
+        per_page = 10
+        total_pages = (len(entries) + per_page - 1) // per_page
+        embed = discord.Embed(title=title, color=discord.Color.blue())
+        embed.description = "\n".join(entries[:per_page])
+        embed.set_footer(text=f"Страница 1/{total_pages}")
+        if total_pages > 1:
+            view = LicListPaginationView(ctx.author.id, entries, per_page, total_pages, embed)
+            view.message = await ctx.send(embed=embed, view=view)
+        else:
+            await ctx.send(embed=embed)
 
     @commands.command(name='military')
     @is_registered()
@@ -1736,107 +1808,6 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         })
 
         return f"✅ Мобилизовано **{quantity:,}** солдат. Население: {new_population:,}."
-    
-@commands.command(name='take-lic')
-@is_registered()
-async def take_license(self, ctx, target: discord.Member, *, vehicle_name: str):
-    """Забрать выданную лицензию (только владелец техники)"""
-    # Находим всю технику, где текущий пользователь – владелец (submitter_id)
-    vehicles = await vehicles_col.find({
-        "submitter_id": str(ctx.author.id),
-        "approved": True
-    }).to_list(length=None)
-    
-    if not vehicles:
-        await ctx.send("❌ У вас нет одобренной техники, лицензии на которую можно забрать.")
-        return
-    
-    # Ищем совпадения по названию (частичное)
-    regex = re.compile(re.escape(vehicle_name.strip()), re.IGNORECASE)
-    matches = [v for v in vehicles if regex.search(v['name'])]
-    
-    if not matches:
-        await ctx.send(f"❌ Среди вашей техники нет названия, содержащего `{vehicle_name}`.")
-        return
-    
-    # Если несколько вариантов – выбор
-    if len(matches) > 1:
-        options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
-        select = Select(placeholder="Выберите технику, лицензию на которую забрать...", options=options)
-        view = TakeLicSelectView(ctx.author.id, target.id, matches, select, self)
-        select.callback = view.select_callback
-        view.add_item(select)
-        await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
-        return
-    
-    # Ровно одна техника
-    vehicle = matches[0]
-    result = await licenses_col.delete_one({
-        'user_id': str(target.id),
-        'vehicle_name': vehicle['name']
-    })
-    if result.deleted_count:
-        await ctx.send(f"✅ Лицензия на **{vehicle['name']}** у {target.mention} забрана.")
-    else:
-        await ctx.send(f"❌ У {target.mention} нет лицензии на **{vehicle['name']}**.")
-
-@commands.command(name='lic-list')
-@is_registered()
-async def license_list(self, ctx, member: discord.Member = None):
-    """Показать выданные лицензии. Без @ – ваши полученные. С @ – выданные этим игроком."""
-    if member is None:
-        # Лицензии, выданные текущему игроку (он получил от кого-то)
-        licenses = await licenses_col.find({'user_id': str(ctx.author.id)}).to_list(length=None)
-        title = f"📜 Лицензии, выданные вам"
-        empty_msg = "Вам никто не выдавал лицензий."
-        # Для каждой лицензии нужно узнать, кто выдал (issued_by) и название техники
-    else:
-        # Лицензии, выданные этим игроком другим
-        licenses = await licenses_col.find({'issued_by': str(member.id)}).to_list(length=None)
-        title = f"📜 Лицензии, выданные игроком {member.name}"
-        empty_msg = f"{member.name} никому не выдавал лицензий."
-    
-    if not licenses:
-        await ctx.send(empty_msg)
-        return
-    
-    # Формируем список строк
-    entries = []
-    for lic in licenses:
-        vehicle_name = lic['vehicle_name']
-        issuer_id = lic.get('issued_by')
-        if member is None:
-            # Показываем, кто выдал
-            issuer = ctx.guild.get_member(int(issuer_id)) if issuer_id else None
-            issuer_name = issuer.name if issuer else f"User{issuer_id}"
-            entries.append(f"**{vehicle_name}** – выдал {issuer_name}")
-        else:
-            # Показываем, кому выдано
-            target_id = lic['user_id']
-            target = ctx.guild.get_member(int(target_id)) if target_id else None
-            target_name = target.name if target else f"User{target_id}"
-            entries.append(f"**{vehicle_name}** – выдано {target_name}")
-    
-    # Пагинация (по 10 записей на страницу)
-    per_page = 10
-    total_pages = (len(entries) + per_page - 1) // per_page
-    current_page = 0
-    
-    embed = discord.Embed(title=title, color=discord.Color.blue())
-    embed.set_footer(text=f"Страница 1/{total_pages}")
-    
-    def get_page(page):
-        start = page * per_page
-        end = start + per_page
-        return "\n".join(entries[start:end])
-    
-    embed.description = get_page(0)
-    
-    if total_pages > 1:
-        view = LicListPaginationView(ctx.author.id, entries, per_page, total_pages, base_embed)
-        view.message = await ctx.send(embed=embed, view=view)
-    else:
-        await ctx.send(embed=embed)
 # ===========================
 # 🏛️ COG: АЛЬЯНСЫ
 # ===========================
