@@ -1606,6 +1606,7 @@ async def license_list(self, ctx, target: discord.Member = None):
         except:
             await ctx.send("❌ Не могу отправить вам ЛС. Проверьте настройки приватности.", ephemeral=True)
 
+
     @commands.command(name='use')
     @is_registered()
     async def use_item(self, ctx, quantity: int, *, item_name: str):
@@ -1863,7 +1864,6 @@ async def perform_mobilization(self, interaction: discord.Interaction, user_id: 
         result_msg += f"\n⏰ Дневной лимит достигнут. Следующая мобилизация через 24 часа."
     
     return result_msg
-
 # ===========================
 # 🏛️ COG: АЛЬЯНСЫ
 # ===========================
@@ -2238,7 +2238,7 @@ class MilitaryView(View):
         max_for_this = min(max_mobilizable, remaining_daily)
         modal = MobilizationModal(max_for_this, remaining_daily, self.cog, already_mobilized, DAILY_LIMIT)
         await interaction.response.send_modal(modal)
-
+        
 class VehicleInfoModal(Modal, title="Заполните данные техники"):
     name = TextInput(label="Название", placeholder="Т-90", max_length=80)
     description = TextInput(label="Описание", style=discord.TextStyle.long, placeholder="Основной боевой танк...", max_length=1000)
