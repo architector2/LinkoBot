@@ -1170,7 +1170,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             filter_desc = f"Поиск по стране: {view.filter_value}"
         else:
             vehicles = all_vehicles
-            filter_desc = "Вся техника"
+            filter_desc = "Вся техника" 
 
         total = len(vehicles)
         per_page = 5
