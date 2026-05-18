@@ -1779,6 +1779,7 @@ async def take_license(self, ctx, target: discord.Member, *, vehicle_name: str):
         await ctx.send(f"✅ Лицензия на **{vehicle['name']}** у {target.mention} забрана.")
     else:
         await ctx.send(f"❌ У {target.mention} нет лицензии на **{vehicle['name']}**.")
+
 @commands.command(name='lic-list')
 @is_registered()
 async def license_list(self, ctx, member: discord.Member = None):
@@ -1832,11 +1833,10 @@ async def license_list(self, ctx, member: discord.Member = None):
     embed.description = get_page(0)
     
     if total_pages > 1:
-        view = LicListPaginationView(ctx.author.id, entries, per_page, total_pages, embed)
+        view = LicListPaginationView(ctx.author.id, entries, per_page, total_pages, base_embed)
         view.message = await ctx.send(embed=embed, view=view)
     else:
         await ctx.send(embed=embed)
-
 # ===========================
 # 🏛️ COG: АЛЬЯНСЫ
 # ===========================
