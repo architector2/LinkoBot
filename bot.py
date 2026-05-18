@@ -349,7 +349,8 @@ USAGE_HINTS = {
     'sell': '❌ Использование: `!sell <количество> @игрок <сумма> <название или часть названия>`\nПример: `!sell 3 @Undervud 15000000 Т-90`',
     'burn': '❌ Использование: `!burn <сумма> <причина>`\nПример: `!burn 100000 экономический кризис`',
     'burn-list': '❌ Использование: `!burn-list @игрок`',
-    
+    'take-lic': '❌ Использование: `!take-lic @игрок <название/часть названия>`\nПример: `!take-lic @Undervud Т-90`',
+    'lic-list': '❌ Использование: `!lic-list` или `!lic-list @игрок`\nБез @ – ваши полученные лицензии. С @ – лицензии, выданные этим игроком.', 
 }
 
 @bot.event
@@ -1735,6 +1736,106 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         })
 
         return f"✅ Мобилизовано **{quantity:,}** солдат. Население: {new_population:,}."
+    
+@commands.command(name='take-lic')
+@is_registered()
+async def take_license(self, ctx, target: discord.Member, *, vehicle_name: str):
+    """Забрать выданную лицензию (только владелец техники)"""
+    # Находим всю технику, где текущий пользователь – владелец (submitter_id)
+    vehicles = await vehicles_col.find({
+        "submitter_id": str(ctx.author.id),
+        "approved": True
+    }).to_list(length=None)
+    
+    if not vehicles:
+        await ctx.send("❌ У вас нет одобренной техники, лицензии на которую можно забрать.")
+        return
+    
+    # Ищем совпадения по названию (частичное)
+    regex = re.compile(re.escape(vehicle_name.strip()), re.IGNORECASE)
+    matches = [v for v in vehicles if regex.search(v['name'])]
+    
+    if not matches:
+        await ctx.send(f"❌ Среди вашей техники нет названия, содержащего `{vehicle_name}`.")
+        return
+    
+    # Если несколько вариантов – выбор
+    if len(matches) > 1:
+        options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
+        select = Select(placeholder="Выберите технику, лицензию на которую забрать...", options=options)
+        view = TakeLicSelectView(ctx.author.id, target.id, matches, select, self)
+        select.callback = view.select_callback
+        view.add_item(select)
+        await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
+        return
+    
+    # Ровно одна техника
+    vehicle = matches[0]
+    result = await licenses_col.delete_one({
+        'user_id': str(target.id),
+        'vehicle_name': vehicle['name']
+    })
+    if result.deleted_count:
+        await ctx.send(f"✅ Лицензия на **{vehicle['name']}** у {target.mention} забрана.")
+    else:
+        await ctx.send(f"❌ У {target.mention} нет лицензии на **{vehicle['name']}**.")
+@commands.command(name='lic-list')
+@is_registered()
+async def license_list(self, ctx, member: discord.Member = None):
+    """Показать выданные лицензии. Без @ – ваши полученные. С @ – выданные этим игроком."""
+    if member is None:
+        # Лицензии, выданные текущему игроку (он получил от кого-то)
+        licenses = await licenses_col.find({'user_id': str(ctx.author.id)}).to_list(length=None)
+        title = f"📜 Лицензии, выданные вам"
+        empty_msg = "Вам никто не выдавал лицензий."
+        # Для каждой лицензии нужно узнать, кто выдал (issued_by) и название техники
+    else:
+        # Лицензии, выданные этим игроком другим
+        licenses = await licenses_col.find({'issued_by': str(member.id)}).to_list(length=None)
+        title = f"📜 Лицензии, выданные игроком {member.name}"
+        empty_msg = f"{member.name} никому не выдавал лицензий."
+    
+    if not licenses:
+        await ctx.send(empty_msg)
+        return
+    
+    # Формируем список строк
+    entries = []
+    for lic in licenses:
+        vehicle_name = lic['vehicle_name']
+        issuer_id = lic.get('issued_by')
+        if member is None:
+            # Показываем, кто выдал
+            issuer = ctx.guild.get_member(int(issuer_id)) if issuer_id else None
+            issuer_name = issuer.name if issuer else f"User{issuer_id}"
+            entries.append(f"**{vehicle_name}** – выдал {issuer_name}")
+        else:
+            # Показываем, кому выдано
+            target_id = lic['user_id']
+            target = ctx.guild.get_member(int(target_id)) if target_id else None
+            target_name = target.name if target else f"User{target_id}"
+            entries.append(f"**{vehicle_name}** – выдано {target_name}")
+    
+    # Пагинация (по 10 записей на страницу)
+    per_page = 10
+    total_pages = (len(entries) + per_page - 1) // per_page
+    current_page = 0
+    
+    embed = discord.Embed(title=title, color=discord.Color.blue())
+    embed.set_footer(text=f"Страница 1/{total_pages}")
+    
+    def get_page(page):
+        start = page * per_page
+        end = start + per_page
+        return "\n".join(entries[start:end])
+    
+    embed.description = get_page(0)
+    
+    if total_pages > 1:
+        view = LicListPaginationView(ctx.author.id, entries, per_page, total_pages, embed)
+        view.message = await ctx.send(embed=embed, view=view)
+    else:
+        await ctx.send(embed=embed)
 
 # ===========================
 # 🏛️ COG: АЛЬЯНСЫ
@@ -3686,7 +3787,67 @@ class AdminAllyDeleteButton(discord.ui.Button):
                 await interaction.response.send_message("❌ Не удалось удалить альянс.", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Ошибка: {str(e)}", ephemeral=True)
+# ... existing UI classes (TakeLicSelectView, TradeOfferView, etc.) ...
 
+class LicListPaginationView(View):
+    def __init__(self, author_id, entries, per_page, total_pages, base_embed):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.entries = entries
+        self.per_page = per_page
+        self.total_pages = total_pages
+        self.current_page = 0
+        self.base_embed = base_embed
+        self.message = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self.author_id
+
+    @discord.ui.button(label="◀️", style=discord.ButtonStyle.primary)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await self.update_embed(interaction)
+
+    @discord.ui.button(label="▶️", style=discord.ButtonStyle.primary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            await self.update_embed(interaction)
+
+    async def update_embed(self, interaction: discord.Interaction):
+        start = self.current_page * self.per_page
+        end = start + self.per_page
+        desc = "\n".join(self.entries[start:end])
+        self.base_embed.description = desc
+        self.base_embed.set_footer(text=f"Страница {self.current_page+1}/{self.total_pages}")
+        await interaction.response.edit_message(embed=self.base_embed, view=self)
+
+        class TakeLicSelectView(View):
+            def __init__(self, author_id, target_id, matches, select, shop_cog):
+            super().__init__(timeout=60)
+            self.author_id = author_id
+            self.target_id = target_id
+            self.matches = matches
+            self.shop_cog = shop_cog
+            select.callback = self.select_callback
+            self.add_item(select)
+
+    async def interaction_check(self, interaction):
+        return interaction.user.id == self.author_id
+
+    async def select_callback(self, interaction):
+        selected_name = interaction.data['values'][0]
+        vehicle = next(v for v in self.matches if v['name'] == selected_name)
+        result = await licenses_col.delete_one({
+            'user_id': str(self.target_id),
+            'vehicle_name': vehicle['name']
+        })
+        if result.deleted_count:
+            await interaction.response.send_message(f"✅ Лицензия на **{vehicle['name']}** у <@{self.target_id}> забрана.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"❌ У <@{self.target_id}> нет лицензии на **{vehicle['name']}**.", ephemeral=True)
+        self.stop()
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
 async def setup_hook():
@@ -3698,4 +3859,4 @@ async def setup_hook():
     await bot.add_cog(Alliances(bot))
 
 if __name__ == '__main__':
-    bot.run(TOKEN)  
+    bot.run(TOKEN) 
