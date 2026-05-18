@@ -1868,7 +1868,7 @@ async def license_list(self, ctx, member: discord.Member = None):
             try: await submitter.send(f"❌ Ваша заявка на технику **{vehicle['name']}** отклонена.\nПричина: {reason}")
             except: pass
 
-   async def perform_mobilization(self, interaction: discord.Interaction, user_id: int, quantity: int, message_link: str):
+async def perform_mobilization(self, interaction: discord.Interaction, user_id: int, quantity: int, message_link: str):
     """
     Новая система мобилизации:
     - Можно мобилизовать несколько раз в день (пока не исчерпается лимит 350,000)
