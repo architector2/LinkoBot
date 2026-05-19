@@ -1324,10 +1324,10 @@ class Admin(commands.Cog, name="👑 Админ"):
         embed.set_footer(text=f"Всего записей: {len(logs)}")
         await ctx.send(embed=embed)
 
-    @commands.command(name='edit-vehicle')
-    @commands.has_permissions(administrator=True)
-    async def edit_vehicle(self, ctx, *, name_or_part: str):
-        """Редактировать информацию о технике (админ)"""
+@commands.command(name='edit-vehicle')
+@commands.has_permissions(administrator=True)
+async def edit_vehicle(self, ctx, *, name_or_part: str):
+        """Редактировать технику (админ)"""
         vehicle = await vehicles_col.find_one({"approved": True, "name": name_or_part.strip()})
         if not vehicle:
             regex = re.compile(re.escape(name_or_part.strip()), re.IGNORECASE)
@@ -1342,13 +1342,13 @@ class Admin(commands.Cog, name="👑 Админ"):
                 await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
                 return
             vehicle = matches[0]
- 
+
         embed = await self.build_vehicle_info_embed(vehicle)
         view = EditVehicleView(ctx.author.id, vehicle, self)
         view.message = await ctx.send(embed=embed, view=view)
- 
-    async def update_vehicle(self, vehicle_id, update_data: dict):
-        """Обновить информацию о технике в БД"""
+
+async def update_vehicle(self, vehicle_id, update_data: dict):
+        """Обновить информацию о технике"""
         await vehicles_col.update_one({'_id': vehicle_id}, {'$set': update_data})
 
 
