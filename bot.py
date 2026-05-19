@@ -1350,7 +1350,7 @@ class Admin(commands.Cog, name="👑 Админ"):
 
     async def update_vehicle(self, vehicle_id, update_data: dict):
         """Обновить информацию о технике"""
-        await vehicles_col.update_one({'_id': vehicle_id}, {'$set': update_data})
+    await vehicles_col.update_one({'_id': vehicle_id}, {'$set': update_data})
 
 # ===========================
 # 🛒 COG: МАГАЗИН
