@@ -1808,7 +1808,33 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         })
 
         return f"✅ Мобилизовано **{quantity:,}** солдат. Население: {new_population:,}."
-# ===========================
+    
+    @commands.command(name='edit-vehicle')
+    @commands.has_permissions(administrator=True)
+    async def edit_vehicle(self, ctx, *, name_or_part: str):
+        """Редактировать технику (админ)"""
+        vehicle = await vehicles_col.find_one({"approved": True, "name": name_or_part.strip()})
+        if not vehicle:
+            regex = re.compile(re.escape(name_or_part.strip()), re.IGNORECASE)
+            matches = await vehicles_col.find({"approved": True, "name": {"$regex": regex}}).to_list(length=25)
+            if not matches:
+                await ctx.send("❌ Техника не найдена.")
+                return
+            if len(matches) > 1:
+                options = [discord.SelectOption(label=v['name'][:100]) for v in matches[:25]]
+                select = Select(placeholder="Выберите технику...", options=options)
+                view = EditVehicleSelectView(ctx.author.id, matches, select, self)
+                await ctx.send("Найдено несколько вариантов. Выберите:", view=view)
+                return
+            vehicle = matches[0]
+
+        embed = await self.build_vehicle_info_embed(vehicle)
+        view = EditVehicleView(ctx.author.id, vehicle, self)
+        view.message = await ctx.send(embed=embed, view=view)
+
+    async def update_vehicle(self, vehicle_id, update_data: dict):
+        """Обновить информацию о технике"""
+        await vehicles_col.update_one({'_id': vehicle_id}, {'$set': update_data})
 # 🏛️ COG: АЛЬЯНСЫ
 # ===========================
 class Alliances(commands.Cog, name="🏛️ Альянсы"):
@@ -3825,6 +3851,284 @@ class TakeLicSelectView(View):
                 ephemeral=True
             )
         self.stop()
+class EditVehicleSelectView(View):
+    """Выбор техники если найдено несколько совпадений"""
+    def __init__(self, author_id, matches, select: Select, shop_cog):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.matches = matches
+        self.shop_cog = shop_cog
+        select.callback = self.select_callback
+        self.add_item(select)
+ 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Это не ваша команда.", ephemeral=True)
+            return False
+        return True
+ 
+    async def select_callback(self, interaction: discord.Interaction):
+        selected_name = interaction.data['values'][0]
+        vehicle = next((v for v in self.matches if v['name'] == selected_name), None)
+        if vehicle:
+            embed = await self.shop_cog.build_vehicle_info_embed(vehicle)
+            view = EditVehicleView(self.author_id, vehicle, self.shop_cog)
+            view.message = await interaction.response.send_message(embed=embed, view=view)
+ 
+class EditVehicleView(View):
+    """Главная панель редактирования техники"""
+    def __init__(self, author_id: int, vehicle: dict, shop_cog):
+        super().__init__(timeout=600)
+        self.author_id = author_id
+        self.vehicle = vehicle
+        self.shop_cog = shop_cog
+        self.message = None
+ 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ Это не ваша команда.", ephemeral=True)
+            return False
+        return True
+ 
+    @button(label="Изменить Название", style=discord.ButtonStyle.primary)
+    async def edit_name(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditVehicleNameModal(self.vehicle, self.shop_cog, self)
+        await interaction.response.send_modal(modal)
+ 
+    @button(label="Изменить Стоимость", style=discord.ButtonStyle.primary)
+    async def edit_price(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditVehiclePriceModal(self.vehicle, self.shop_cog, self)
+        await interaction.response.send_modal(modal)
+ 
+    @button(label="Изменить Описание", style=discord.ButtonStyle.primary)
+    async def edit_description(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditVehicleDescriptionModal(self.vehicle, self.shop_cog, self)
+        await interaction.response.send_modal(modal)
+ 
+    @button(label="Изменить Страну", style=discord.ButtonStyle.success)
+    async def edit_country(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = SelectCountryView(self.vehicle, self.shop_cog, self)
+        await view.on_load()
+        await interaction.response.send_message(
+            "Выберите страну владельца техники:",
+            view=view,
+            ephemeral=True
+        )
+ 
+    @button(label="Изменить Изображение", style=discord.ButtonStyle.primary)
+    async def edit_image(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditVehicleImageModal(self.vehicle, self.shop_cog, self)
+        await interaction.response.send_modal(modal)
+ 
+    @button(label="Изменить Ссылку", style=discord.ButtonStyle.primary)
+    async def edit_wiki_link(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = EditVehicleWikiLinkModal(self.vehicle, self.shop_cog, self)
+        await interaction.response.send_modal(modal)
+ 
+    @button(label="Закончить Редактирование", style=discord.ButtonStyle.success)
+    async def finish_edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Получаем обновленную информацию о технике
+        updated_vehicle = await vehicles_col.find_one({'_id': self.vehicle['_id']})
+        if updated_vehicle:
+            embed = await self.shop_cog.build_vehicle_info_embed(updated_vehicle)
+            await interaction.response.edit_message(embed=embed, view=None)
+            self.stop()
+        else:
+            await interaction.response.send_message("❌ Техника не найдена.", ephemeral=True)
+ 
+    async def refresh_vehicle(self):
+        """Обновить данные техники из БД"""
+        updated = await vehicles_col.find_one({'_id': self.vehicle['_id']})
+        if updated:
+            self.vehicle = updated
+            return updated
+        return None
+ 
+class EditVehicleNameModal(Modal, title="Изменить Название"):
+    new_name = TextInput(label="Новое название", max_length=80)
+ 
+    def __init__(self, vehicle: dict, shop_cog, parent_view: EditVehicleView):
+        super().__init__()
+        self.vehicle = vehicle
+        self.shop_cog = shop_cog
+        self.parent_view = parent_view
+        self.new_name.default = vehicle.get('name', '')
+ 
+    async def on_submit(self, interaction: discord.Interaction):
+        new_name = self.new_name.value.strip()
+        
+        if not new_name:
+            await interaction.response.send_message("❌ Название не может быть пустым.", ephemeral=True)
+            return
+ 
+        # Проверяем дубликаты
+        existing = await vehicles_col.find_one({
+            'name': new_name,
+            '_id': {'$ne': self.vehicle['_id']}
+        })
+        if existing:
+            await interaction.response.send_message("❌ Техника с таким названием уже существует.", ephemeral=True)
+            return
+ 
+        await self.shop_cog.update_vehicle(self.vehicle['_id'], {'name': new_name})
+        await self.parent_view.refresh_vehicle()
+        
+        await interaction.response.send_message(f"✅ Название изменено на **{new_name}**", ephemeral=True)
+ 
+class EditVehiclePriceModal(Modal, title="Изменить Стоимость"):
+    new_price = TextInput(label="Новая стоимость", max_length=20)
+ 
+    def __init__(self, vehicle: dict, shop_cog, parent_view: EditVehicleView):
+        super().__init__()
+        self.vehicle = vehicle
+        self.shop_cog = shop_cog
+        self.parent_view = parent_view
+        self.new_price.default = str(vehicle.get('price', 0))
+ 
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            new_price = int(self.new_price.value.replace(',', '').replace(' ', ''))
+            if new_price <= 0:
+                raise ValueError
+        except ValueError:
+            await interaction.response.send_message("❌ Стоимость должна быть положительным целым числом.", ephemeral=True)
+            return
+ 
+        old_price = self.vehicle.get('price', 0)
+        await self.shop_cog.update_vehicle(self.vehicle['_id'], {'price': new_price})
+        await self.parent_view.refresh_vehicle()
+        
+        await interaction.response.send_message(
+            f"✅ Стоимость изменена\n**Было:** {old_price:,} 💵\n**Стало:** {new_price:,} 💵",
+            ephemeral=True
+        )
+ 
+class EditVehicleDescriptionModal(Modal, title="Изменить Описание"):
+    new_description = TextInput(label="Новое описание", style=discord.TextStyle.long, max_length=1000)
+ 
+    def __init__(self, vehicle: dict, shop_cog, parent_view: EditVehicleView):
+        super().__init__()
+        self.vehicle = vehicle
+        self.shop_cog = shop_cog
+        self.parent_view = parent_view
+        self.new_description.default = vehicle.get('description', '')
+ 
+    async def on_submit(self, interaction: discord.Interaction):
+        new_description = self.new_description.value.strip()
+        
+        if not new_description:
+            await interaction.response.send_message("❌ Описание не может быть пустым.", ephemeral=True)
+            return
+ 
+        await self.shop_cog.update_vehicle(self.vehicle['_id'], {'description': new_description})
+        await self.parent_view.refresh_vehicle()
+        
+        await interaction.response.send_message("✅ Описание изменено.", ephemeral=True)
+ 
+class EditVehicleImageModal(Modal, title="Изменить Изображение"):
+    new_image_url = TextInput(label="Ссылка на изображение", placeholder="https://...", max_length=500)
+ 
+    def __init__(self, vehicle: dict, shop_cog, parent_view: EditVehicleView):
+        super().__init__()
+        self.vehicle = vehicle
+        self.shop_cog = shop_cog
+        self.parent_view = parent_view
+        if vehicle.get('image_url'):
+            self.new_image_url.default = vehicle['image_url']
+ 
+    async def on_submit(self, interaction: discord.Interaction):
+        image_url = self.new_image_url.value.strip()
+        
+        if not image_url:
+            await interaction.response.send_message("❌ URL не может быть пустым.", ephemeral=True)
+            return
+ 
+        # Валидация URL
+        is_valid, error_msg = validate_url(image_url)
+        if not is_valid:
+            await interaction.response.send_message(error_msg, ephemeral=True)
+            return
+ 
+        await self.shop_cog.update_vehicle(self.vehicle['_id'], {'image_url': image_url})
+        await self.parent_view.refresh_vehicle()
+        
+        await interaction.response.send_message("✅ Изображение обновлено.", ephemeral=True)
+ 
+class EditVehicleWikiLinkModal(Modal, title="Изменить Ссылку на Википедию"):
+    new_wiki_link = TextInput(label="Ссылка на википедию", placeholder="https://ru.wikipedia.org/wiki/...", max_length=200)
+ 
+    def __init__(self, vehicle: dict, shop_cog, parent_view: EditVehicleView):
+        super().__init__()
+        self.vehicle = vehicle
+        self.shop_cog = shop_cog
+        self.parent_view = parent_view
+        if vehicle.get('wiki_link'):
+            self.new_wiki_link.default = vehicle['wiki_link']
+ 
+    async def on_submit(self, interaction: discord.Interaction):
+        wiki_link = self.new_wiki_link.value.strip()
+        
+        if not wiki_link:
+            await interaction.response.send_message("❌ Ссылка не может быть пустой.", ephemeral=True)
+            return
+ 
+        # Валидация URL
+        is_valid, error_msg = validate_url(wiki_link)
+        if not is_valid:
+            await interaction.response.send_message(error_msg, ephemeral=True)
+            return
+ 
+        await self.shop_cog.update_vehicle(self.vehicle['_id'], {'wiki_link': wiki_link})
+        await self.parent_view.refresh_vehicle()
+        
+        await interaction.response.send_message("✅ Ссылка на википедию обновлена.", ephemeral=True)
+ 
+class SelectCountryView(View):
+    """View для выбора страны при редактировании техники"""
+    def __init__(self, vehicle: dict, shop_cog, parent_view: EditVehicleView):
+        super().__init__(timeout=120)
+        self.vehicle = vehicle
+        self.shop_cog = shop_cog
+        self.parent_view = parent_view
+ 
+    async def build_country_select(self):
+        """Получить список всех стран из техники в БД"""
+        vehicles = await vehicles_col.find({"approved": True}).to_list(length=None)
+        countries = set()
+        
+        for v in vehicles:
+            country = v.get('country')
+            if country:
+                countries.add(country)
+        
+        countries = sorted(list(countries))[:25]
+        
+        if not countries:
+            countries = ["Нет стран"]
+        
+        options = [discord.SelectOption(label=c) for c in countries]
+        return options
+ 
+    async def on_load(self):
+        """Инициализировать select с странами"""
+        options = await self.build_country_select()
+        select = Select(
+            placeholder="Выберите страну владельца...",
+            options=options
+        )
+        select.callback = self.country_select_callback
+        self.add_item(select)
+ 
+    async def country_select_callback(self, interaction: discord.Interaction):
+        selected_country = interaction.data['values'][0]
+        
+        await self.shop_cog.update_vehicle(self.vehicle['_id'], {'country': selected_country})
+        await self.parent_view.refresh_vehicle()
+        
+        await interaction.response.send_message(
+            f"✅ Страна владельца изменена на **{selected_country}**",
+            ephemeral=True
+        )
 
 # ===== ЗАГРУЗКА COG И ЗАПУСК =====
 @bot.event
