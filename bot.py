@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord.ui import Select, View, Modal, TextInput, button
 import gradio as gr
 import os
+import asyncio
 import re
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
@@ -4098,6 +4099,18 @@ async def setup_hook():
     await bot.add_cog(Admin(bot))
     await bot.add_cog(Shop(bot))
     await bot.add_cog(Alliances(bot))
+def status_page():
+    return "LinkoBot is running 24/7!"
 
-if __name__ == '__main__':
-    bot.run(TOKEN) 
+demo = gr.Interface(fn=status_page, inputs=[], outputs="text", title="System Active")
+
+async def main():
+    # 1. Launches the fake webpage required by Hugging Face on port 7860
+    config = demo.launch(server_name="0.0.0.0", server_port=7860, prevent_thread_lock=True)
+    
+    # 2. Starts your actual bot using your secret token variable
+    async with bot:
+        await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    asyncio.run(main())
