@@ -1,3 +1,6 @@
+# ================================
+# ИСПРАВЛЕННЫЙ ПОЛНЫЙ КОД С ИНТЕГРИРОВАННЫМИ ФИКСАМИ
+# ================================
 import sys
 from types import ModuleType
 
@@ -104,6 +107,7 @@ DEFAULT_BUDGETS = {
     'budget_other': 1,
 }
 
+# ========== ИЗМЕНЕНИЕ 1: Функция get_user (УБРАТЬ mobilization_used) ==========
 async def get_user(user_id: int) -> dict:
     user = await economy_col.find_one({'_id': str(user_id)})
     if user is None:
@@ -124,7 +128,7 @@ async def get_user(user_id: int) -> dict:
             'country': None,
             'country_flag_url': None,
             'mobilization_percent': 2.5,
-            'mobilization_used': False,
+            # ✅ УДАЛЕНО: 'mobilization_used': False,
             'alliance_id': None,
             'alliance_role': None,
             'ideology': 'Не указана',
@@ -151,8 +155,7 @@ async def get_user(user_id: int) -> dict:
             update['country_flag_url'] = None
         if 'mobilization_percent' not in user:
             update['mobilization_percent'] = 2.5
-        if 'mobilization_used' not in user:
-            update['mobilization_used'] = False
+        # ✅ УДАЛЕНО: if 'mobilization_used' не нужно больше
         if 'alliance_id' not in user:
             update['alliance_id'] = None
         if 'alliance_role' not in user:
@@ -448,6 +451,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
     def __init__(self, bot):
         self.bot = bot
 
+    # ========== ИЗМЕНЕНИЕ 2: Команда collect (25% доход + 5% солдат при росте населения) ==========
     @commands.command(name='collect', aliases=['coll'])
     @is_registered()
     async def collect(self, ctx):
@@ -467,7 +471,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
             await ctx.send(f"⏰ Подожди ещё **{remaining_mins}** мин. перед следующим коллектом!")
             return
 
-        income_per_hour = user['gdp'] * 0.10 / 48
+        # ✅ ИЗМЕНЕНО: 0.10 на 0.25 (25% ВВП за 2 дня вместо 10%)
+        income_per_hour = user['gdp'] * 0.25 / 48
         gross_income = int(income_per_hour * hours_passed)
 
         # Применяем баффы/дебаффы
@@ -478,7 +483,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
         debuff_list = [b for b in buffs if b['type'] == 'debuff']
 
         sum_buff_percent = sum(b['percent'] for b in buff_list)
-        sum_debuff_percent = sum(b['percent'] for b in debuff_list)  # положительные числа
+        sum_debuff_percent = sum(b['percent'] for b in debuff_list)
 
         buff_amount = int(gross_income * sum_buff_percent / 100)
         debuff_amount = int(gross_income * sum_debuff_percent / 100)
@@ -531,6 +536,8 @@ class Economy(commands.Cog, name="💰 Экономика"):
         population = user.get('population', 0)
         pop_gained = 0
         new_population = population
+        soldiers_bonus = 0  # ✅ НОВОЕ: бонус солдат
+        
         if population > 0:
             last_pop_update = user.get('last_pop_update', 0)
             if last_pop_update == 0:
@@ -544,6 +551,10 @@ class Economy(commands.Cog, name="💰 Экономика"):
                 pop_gained = new_population - population
                 if pop_gained > 0:
                     population = new_population
+                    # ✅ НОВОЕ: Добавляем 5% от прибавленного населения как солдат
+                    soldiers_bonus = int(pop_gained * 0.05)
+                    if soldiers_bonus > 0:
+                        await add_item(ctx.author.id, "Обученный Солдат", soldiers_bonus)
 
         update_data = {
             'balance': new_balance,
@@ -557,6 +568,7 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         await update_user(ctx.author.id, update_data)
 
+        # Формируем эмбед с информацией
         embed = discord.Embed(
             title="💵 Коллект",
             description=f"Ты собрал доход за **{hours_passed:.1f}** ч.",
@@ -609,7 +621,10 @@ class Economy(commands.Cog, name="💰 Экономика"):
 
         if population > 0:
             if pop_gained > 0:
-                embed.add_field(name="👥 Прирост населения", value=f"+{pop_gained:,} чел.", inline=True)
+                pop_text = f"+{pop_gained:,} чел."
+                if soldiers_bonus > 0:
+                    pop_text += f"\n👥 Бонус солдат: +{soldiers_bonus:,}"
+                embed.add_field(name="👥 Прирост населения", value=pop_text, inline=True)
             else:
                 embed.add_field(name="👥 Прирост населения", value="0 чел. (слишком мало времени)", inline=True)
             embed.add_field(name="🌍 Новое население", value=f"{new_population:,} чел.", inline=False)
@@ -818,11 +833,13 @@ class Economy(commands.Cog, name="💰 Экономика"):
         embed = await view.build_embed('balance')
         view.message = await ctx.send(embed=embed, view=view)
 
+    # ========== ИЗМЕНЕНИЕ 5: Функция build_cab_embed (25% доход) ==========
     async def build_cab_embed(self, member: discord.Member) -> discord.Embed:
         """Генерирует эмбед статистики игрока (аналог !cab). Используется в других частях кода."""
         user = await get_user(member.id)
         unhappiness = await update_unhappiness(member.id, user)
-        income_per_hour = user['gdp'] * 0.10 / 48 if user['gdp'] > 0 else 0  # 10% ВВП за 2 дня
+        # ✅ ИЗМЕНЕНО: 0.10 на 0.25
+        income_per_hour = user['gdp'] * 0.25 / 48 if user['gdp'] > 0 else 0  # 25% ВВП за 2 дня
 
         current_time = datetime.now().timestamp()
         last_collect = user.get('last_collect', 0)
@@ -1453,6 +1470,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         else:
             await ctx.send(embed=embed)
 
+    # ========== ИЗМЕНЕНИЕ 3: Команда military (УБРАТЬ проверку mobilization_used) ==========
     @commands.command(name='military')
     @is_registered()
     async def military(self, ctx):
@@ -1483,6 +1501,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
         )
         embed.add_field(name="📋 Создание техники", value=f"Статус: {submission_info}", inline=False)
         embed.add_field(name="🔧 Модернизация", value=f"Статус: {submission_info}", inline=False)
+        # ✅ ИЗМЕНЕНО: убрана проверка mobilization_used
         embed.add_field(name="👥 Мобилизация", value=f"Доступно: {max_mobilizable:,} / Дневной лимит: {remaining_daily:,}", inline=False)
         
         view = MilitaryView(self, ctx.author.id)
@@ -1757,6 +1776,7 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             try: await submitter.send(f"❌ Ваша заявка на технику **{vehicle['name']}** отклонена.\nПричина: {reason}")
             except: pass
 
+    # ========== ИЗМЕНЕНИЕ 4: Функция perform_mobilization (УБРАТЬ mobilization_used) ==========
     async def perform_mobilization(self, interaction: discord.Interaction, user_id: int, quantity: int, message_link: str):
         pattern = r"https://discord\.com/channels/\d+/(\d+)/(\d+)"
         match = re.match(pattern, message_link)
@@ -1786,9 +1806,9 @@ class Shop(commands.Cog, name="🛒 Магазин"):
             return f"❌ Превышен дневной лимит (уже {already:,}, можно ещё {max(0, 350_000 - already):,})."
 
         new_population = population - quantity
+        # ✅ ИЗМЕНЕНО: УБРАНО 'mobilization_used': True
         await update_user(user_id, {
-            'population': new_population,
-            'mobilization_used': True
+            'population': new_population
         })
         await add_item(user_id, "Обученный Солдат", quantity)
 
@@ -2157,10 +2177,8 @@ class MilitaryView(View):
             await interaction.response.send_message("❌ У вас нет населения.", ephemeral=True)
             return
 
-        if user.get('mobilization_used', False):
-            await interaction.response.send_message("❌ Вы уже мобилизовали население. Обратитесь к администратору для изменения лимита.", ephemeral=True)
-            return
-
+        # Проверка на mobilization_used удалена, так как поле больше не используется
+        # Дневной лимит и доступное количество населения проверяются внутри модального окна
         mob_percent = user.get('mobilization_percent', 2.5)
         max_mobilizable = int(population * mob_percent / 100)
         if max_mobilizable <= 0:
