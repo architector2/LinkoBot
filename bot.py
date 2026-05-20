@@ -1,3 +1,14 @@
+import sys
+from types import ModuleType
+
+# Создаем фейковый модуль audioop для обхода ошибки в Python 3.14+
+if 'audioop' not in sys.modules:
+    fake_audioop = ModuleType('audioop')
+    fake_audioop.error = Exception
+    def toglobal(cp, size, left, right): return b''
+    fake_audioop.toglobal = toglobal
+    sys.modules['audioop'] = fake_audioop
+    
 import discord
 from discord.ext import commands
 from discord.ui import Select, View, Modal, TextInput, button
